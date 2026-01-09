@@ -1,0 +1,9 @@
+{
+  "name": "Qook – Jouw Culinaire Sous-chef",
+  "description": "Jouw culinaire sous-chef voor gepersonaliseerde weekmenu's, Koelkast Magic en gastronomische kookbegeleiding.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera",
+    "geolocation"
+  ]
+}
