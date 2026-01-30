@@ -4,3 +4,4 @@ pydantic
 google-generativeai
 supabase
 gunicorn
+Python-dotenv
