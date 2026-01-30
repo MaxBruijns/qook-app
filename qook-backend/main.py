@@ -9,13 +9,15 @@ from pydantic import BaseModel
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from supabase import create_client, Client
+from dotenv import load_dotenv
+load_dotenv()
 
 app = FastAPI()
 
 # --- KEYS ---
-SUPABASE_URL = "https://jhpzkyszkqkfgbztyshl.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpocHpreXN6a3FrZmdienR5c2hsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NTM4OTM2MCwiZXhwIjoyMDgwOTY1MzYwfQ.5ltHSpurF_QaFmiMB_vYqsemGwyhXQ6rys8L8g4H6Ww"
-GOOGLE_API_KEY = "AIzaSyAS77j94mAV5GASEOhuQBIFmB_yorv0u0Y"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY") # Zorg dat deze naam matcht met je .env.local
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
