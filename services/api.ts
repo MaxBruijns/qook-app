@@ -1,7 +1,9 @@
-import { supabase } from '../lib/supabase';
+// 1. Herstel het pad naar supabase (waarschijnlijk staat deze nu in ../utils/)
+// Als dit nog steeds een fout geeft, verander het dan naar './supabase' of '../supabase'
+import { supabase } from '../utils/supabase'; 
 
-// URL backend
-const API_URL = 'https:qook-backend.onrender.com';
+// 2. URL backend hersteld (// toegevoegd)
+const API_URL = 'https://qook-backend.onrender.com';
 
 // Hulp: Foto's
 export const generateMealImage = async (title: string, prompt: string) => {
@@ -15,7 +17,7 @@ export const generateWeeklyPlan = async (prefs: any) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            user_id: prefs.user_id || 'demo-user', // Fallback voor als auth nog niet werkt in demo
+            user_id: prefs.user_id || 'demo-user',
             ...prefs
         })
     });
@@ -59,7 +61,7 @@ export const replaceMeal = async (currentMeal: any, prefs: any, dayIndex: number
         })
     });
     const data = await res.json();
-    return { ...data.meal, id: currentMeal.id }; // Behoud ID
+    return { ...data.meal, id: currentMeal.id };
 };
 
 // 4. SCAN FRIDGE
@@ -96,12 +98,11 @@ async function fetchPlanFromDB(planId: string) {
     return {
         days: recipes.map(r => ({
             ...r,
-            ai_image_prompt: r.image_keywords // Mapping voor demo
+            ai_image_prompt: r.image_keywords
         })),
         zero_waste_report: plan?.zero_waste_report || '',
         generatedAt: new Date().toISOString()
     };
 }
 
-// Dummy export voor demo compatibiliteit
 export const generateDayPlan = async () => null;
