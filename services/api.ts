@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase';
 
 // URL backend
-const API_URL = 'http://127.0.0.1:8000';
+const API_URL = 'https:qook-backend.onrender.com';
 
 // Hulp: Foto's
 export const generateMealImage = async (title: string, prompt: string) => {
