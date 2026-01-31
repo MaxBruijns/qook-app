@@ -101,6 +101,9 @@ async function fetchPlanFromDB(planId: string) {
     return {
         days: recipes.map(r => ({
             ...r,
+            // Hier vertalen we de DB-kolommen naar de Frontend-variabelen:
+            time: r.estimated_time_minutes || r.time || 30, 
+            calories: r.calories_per_portion || r.calories || 500,
             image_url: r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality, plated")}?width=800&height=600&nologo=true`,
             ai_image_prompt: r.ai_image_prompt || r.title
         })),
