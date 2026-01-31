@@ -1,17 +1,12 @@
-// 1. Herstel het pad naar supabase (waarschijnlijk staat deze nu in ../utils/)
-// Als dit nog steeds een fout geeft, verander het dan naar './supabase' of '../supabase'
 import { supabase } from '../utils/supabase'; 
 
-// 2. URL backend hersteld (// toegevoegd)
 const API_URL = 'https://qook-backend.onrender.com';
 
-// Hulp: Foto's
 export const generateMealImage = async (title: string, prompt: string) => {
     const term = prompt || title;
-    return `https://image.pollinations.ai/prompt/${encodeURIComponent(term)}?width=400&height=300&nologo=true`;
+    return `https://image.pollinations.ai/prompt/${encodeURIComponent(term + " gourmet food photography, high quality, plated")}?width=800&height=600&nologo=true`;
 };
 
-// 1. GENERATE WEEKLY PLAN
 export const generateWeeklyPlan = async (prefs: any) => {
     const res = await fetch(`${API_URL}/generate-weekly-plan`, {
         method: 'POST',
@@ -25,24 +20,21 @@ export const generateWeeklyPlan = async (prefs: any) => {
     if (!res.ok) throw new Error("Backend Error");
     const data = await res.json();
 
-    // --- CRUCIALE AANPASSING VOOR DEMO ---
-    // Als de backend zegt dat het een demo is of een hergebruikt plan uit de bank:
     if (data.plan_id === "demo-temporary-id" || data.plan_id === "reused-from-bank") {
         return {
             days: data.days.map((r: any) => ({
                 ...r,
-                ai_image_prompt: r.title // Gebruik titel als backup voor de foto
+                image_url: r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality, plated")}?width=800&height=600&nologo=true`,
+                ai_image_prompt: r.ai_image_prompt || r.title
             })),
             zero_waste_report: data.zero_waste_report || 'Geselecteerd uit de Qook receptenbank.',
             generatedAt: new Date().toISOString()
         };
     }
 
-    // Alleen voor geregistreerde gebruikers die echt opslaan:
     return await fetchPlanFromDB(data.plan_id);
 };
 
-// 2. GET FULL RECIPE
 export const generateFullRecipe = async (meal: any, prefs: any) => {
     if (meal.steps && meal.steps.length > 0) return meal;
 
@@ -63,7 +55,6 @@ export const generateFullRecipe = async (meal: any, prefs: any) => {
     return { ...meal, ...data.details };
 };
 
-// 3. REPLACE MEAL
 export const replaceMeal = async (currentMeal: any, prefs: any, dayIndex: number) => {
     const res = await fetch(`${API_URL}/replace-meal`, {
         method: 'POST',
@@ -79,7 +70,6 @@ export const replaceMeal = async (currentMeal: any, prefs: any, dayIndex: number
     return { ...data.meal, id: currentMeal.id };
 };
 
-// 4. SCAN FRIDGE
 export const analyzeFridgeImage = async (base64: string, prefs: any) => {
     const res = await fetch(`${API_URL}/analyze-fridge`, {
         method: 'POST',
@@ -89,7 +79,6 @@ export const analyzeFridgeImage = async (base64: string, prefs: any) => {
     return await res.json();
 };
 
-// 5. SHOPPING LIST
 export const generateShoppingList = async (meals: any[], prefs: any) => {
     const res = await fetch(`${API_URL}/generate-shopping-list`, {
         method: 'POST',
@@ -103,32 +92,21 @@ export const generateShoppingList = async (meals: any[], prefs: any) => {
     return data.items.map((it: any, i: number) => ({ ...it, id: `item-${i}`, checked: false }));
 };
 
-// --- DB MAPPER ---
 async function fetchPlanFromDB(planId: string) {
-    const { data: recipes } = await supabase
-        .from('recipes')
-        .select('*')
-        .eq('weekly_plan_id', planId)
-        .order('day_of_week', { ascending: true });
-
-    const { data: plan } = await supabase
-        .from('weekly_plans')
-        .select('zero_waste_report')
-        .eq('id', planId)
-        .single();
+    const { data: recipes } = await supabase.from('recipes').select('*').eq('weekly_plan_id', planId).order('day_of_week', { ascending: true });
+    const { data: plan } = await supabase.from('weekly_plans').select('zero_waste_report').eq('id', planId).single();
 
     if (!recipes) return null;
 
     return {
         days: recipes.map(r => ({
             ...r,
-            // AI Studio gebruikte 'image_url' of 'ai_image_prompt'.
-            // We zorgen hier dat er ALTIJD een werkende link ontstaat.
-            image_url: r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality, plated") }?width=800&height=600&nologo=true`,
+            image_url: r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality, plated")}?width=800&height=600&nologo=true`,
             ai_image_prompt: r.ai_image_prompt || r.title
         })),
         zero_waste_report: plan?.zero_waste_report || '',
         generatedAt: new Date().toISOString()
     };
+}
 
 export const generateDayPlan = async () => null;
