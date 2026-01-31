@@ -90,18 +90,56 @@ async def chat_assistant(data: dict):
 # 1. WEEKPLAN (Jouw Demo Logica)
 @app.post("/generate-weekly-plan")
 async def generate_weekly_plan(prefs: UserPrefsInput):
-    print(f"--- GENEREREN VOOR {prefs.user_id} ---")
+    print(f"--- START GENEREREN VOOR {prefs.user_id} ---")
     
-    modes_desc = ", ".join([f"Day {d}: {m}" for d, m in prefs.dayModes.items()])
+    # 1. GESCHIEDENIS OPHALEN (3 MAANDEN REGEL)
+    exclude_titles = []
+    if prefs.user_id != "demo-user":
+        drie_maanden_geleden = (datetime.now() - timedelta(days=90)).isoformat()
+        # We halen de plannen van de laatste 90 dagen op voor deze gebruiker
+        history = supabase.table('weekly_plans').select('id, created_at').eq('user_id', prefs.user_id).gt('created_at', drie_maanden_geleden).execute()
+        if history.data:
+            plan_ids = [h['id'] for h in history.data]
+            recipes_history = supabase.table('recipes').select('title').in_('weekly_plan_id', plan_ids).execute()
+            exclude_titles = [r['title'] for r in recipes_history.data]
+
+    # 2. ZOEKEN IN DE RECEPTENBANK (DATABASE FIRST)
+    try:
+        # Zoek gerechten die matchen met de gevraagde 'mode' (bijv. premium)
+        query = supabase.table('recipes').select('*').eq('mode', prefs.dayModes.get("0", "premium"))
+        
+        # Filter op dieet als dat is opgegeven
+        if prefs.diet and "Geen" not in prefs.diet:
+            query = query.contains('diet_tags', prefs.diet)
+            
+        db_matches = query.execute()
+        
+        # Filter resultaten op de 3-maanden regel
+        available_recipes = [r for r in db_matches.data if r['title'] not in exclude_titles]
+
+        # Hebben we genoeg (7 stuks) in onze eigen bank?
+        if len(available_recipes) >= 7:
+            print("--- BANK MATCH! AI NIET NODIG ---")
+            selected = random.sample(available_recipes, 7)
+            return {
+                "status": "success",
+                "plan_id": "reused-from-bank",
+                "days": selected,
+                "zero_waste_report": "Geselecteerd uit uw persoonlijke receptenbank."
+            }
+    except Exception as e:
+        print(f"Zoekfout in bank: {e}")
+
+    # 3. AI FALLBACK (ALS DE BANK LEEG IS OF NIET GENOEG MATCHES HEEFT)
+    print("--- NIET GENOEG MATCHES: AI AANROEPEN ---")
     
     prompt = f"""
-    ROLE: Chef Qook. TASK: Generate 7-DAY MENU (Day 0-6).
-    LANG: {prefs.language}.
-    AGENDA: {modes_desc} (Default: premium).
-    ZERO-WASTE: {prefs.zeroWasteLevel}%. Include 'zero_waste_report'.
-    PREFS: Diet: {prefs.diet}, Household: {prefs.adultsCount}+{prefs.childrenCount}, Budget: {prefs.budget}.
-
-    OUTPUT JSON:
+    ROLE: Professional Chef Qook. TASK: Generate a FULL 7-DAY MENU.
+    LANG: {prefs.language}. DIET: {prefs.diet}. BUDGET: {prefs.budget}.
+    EXCLUDE THESE TITLES: {exclude_titles}.
+    
+    IMPORTANT: Provide FULL recipe details for each day so we can store them.
+    OUTPUT JSON FORMAT:
     {{
         "zero_waste_report": "...",
         "days": [
@@ -109,10 +147,13 @@ async def generate_weekly_plan(prefs: UserPrefsInput):
                 "day_number": 0,
                 "title": "...",
                 "short_description": "...",
-                "ai_image_prompt": "english keywords...",
+                "ingredients": [{{ "name": "...", "amount": 1, "unit": "g" }}],
+                "steps": [{{ "step_index": 1, "user_text": "...", "needs_timer": false }}],
                 "estimated_time_minutes": 30,
                 "difficulty": "Medium",
                 "calories_per_portion": 600,
+                "wine_pairing": {{ "type": "...", "description": "..." }},
+                "diet_tags": {prefs.diet},
                 "mode": "premium"
             }}
         ]
@@ -120,73 +161,38 @@ async def generate_weekly_plan(prefs: UserPrefsInput):
     """
     
     try:
-        # 1. AI genereert het plan
         response = model.generate_content(prompt)
         data = json.loads(clean_json(response.text))
+        days_list = data if isinstance(data, list) else data.get('days', [])
         
-        # --- NIEUWE SLIMME CHECK ---
-        # Als Gemini direct een lijst teruggeeft, zetten we die in 'days_list'
-        if isinstance(data, list):
-            days_list = data
-            report = "Geen rapportage beschikbaar"
-        else:
-            # Als Gemini een object teruggeeft (zoals gevraagd), halen we de data eruit
-            days_list = data.get('days', [])
-            report = data.get('zero_waste_report', 'Geen rapportage beschikbaar')
-        # ---------------------------
+        # 4. OPSLAAN IN DATABASE (VOOR DE VOLGENDE KEER)
+        # We maken een geldig UUID voor de demo-user zodat de database niet crasht
+        db_user_id = prefs.user_id if prefs.user_id != "demo-user" else "00000000-0000-0000-0000-000000000000"
+        
+        plan_record = supabase.table('weekly_plans').insert({
+            "user_id": db_user_id, "week_number": 1, "year": 2025,
+            "zero_waste_report": data.get('zero_waste_report', '') if isinstance(data, dict) else ""
+        }).execute()
+        
+        plan_id = plan_record.data[0]['id']
+        
+        # Sla elk nieuw AI-recept op in de 'bank'
+        for d in days_list:
+            supabase.table('recipes').insert({
+                'weekly_plan_id': plan_id,
+                'title': d.get('title'),
+                'short_description': d.get('short_description'),
+                'ingredients': d.get('ingredients'),
+                'steps': d.get('steps'),
+                'estimated_time_minutes': d.get('estimated_time_minutes'),
+                'difficulty': d.get('difficulty'),
+                'calories_per_portion': d.get('calories_per_portion'),
+                'mode': d.get('mode'),
+                'diet_tags': prefs.diet,
+                'wine_pairing': d.get('wine_pairing')
+            }).execute()
 
-        # Voeg een tijdelijke ID toe voor de frontend
-        plan_id = "temp-demo-id" 
-
-        # 2. Alleen opslaan als het een échte user is (geen demo-user)
-        if prefs.user_id != "demo-user":
-            try:
-                plan_record = supabase.table('weekly_plans').insert({
-                    "user_id": prefs.user_id, 
-                    "week_number": 1, 
-                    "year": 2025,
-                    "zero_waste_report": report
-                }).execute()
-                
-                if plan_record.data:
-                    plan_id = plan_record.data[0]['id']
-                    
-                    # Sla ook de recepten op
-                    for d in days_list:
-                        supabase.table('recipes').insert({
-                            'weekly_plan_id': plan_id,
-                            'day_of_week': str(d.get('day_number')),
-                            'title': d.get('title'),
-                            'short_description': d.get('short_description'),
-                            'image_keywords': d.get('ai_image_prompt'),
-                            'estimated_time_minutes': d.get('estimated_time_minutes'),
-                            'difficulty': d.get('difficulty'),
-                            'calories_per_portion': d.get('calories_per_portion'),
-                            'mode': d.get('mode')
-                        }).execute()
-            except Exception as db_err:
-                print(f"Database error (overgeslagen): {db_err}")
-
-        # 3. Stuur de data terug naar de frontend
-        return {
-            "status": "success", 
-            "plan_id": plan_id, 
-            "days": days_list, 
-            "zero_waste_report": report
-        }
-
-    except Exception as e:
-        print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
-
-        # 3. BELANGRIJK: Stuur de 'data' (het menu) zelf terug!
-        # De frontend heeft de inhoud nodig om het dashboard te vullen.
-        return {
-            "status": "success", 
-            "plan_id": plan_id, 
-            "days": data.get('days'), 
-            "zero_waste_report": data.get('zero_waste_report')
-        }
+        return {"status": "success", "plan_id": plan_id, "days": days_list}
 
     except Exception as e:
         print(traceback.format_exc())
