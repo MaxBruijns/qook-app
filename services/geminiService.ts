@@ -1,8 +1,64 @@
+import { GoogleGenAI } from "@google/genai";
 import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult } from "../types";
 
 const BACKEND_URL = 'https://qook-backend.onrender.com';
+const MODEL_IMAGE = 'gemini-2.0-flash-image'; // Of jouw specifieke model
 
-// 1. WEEKMENU GENEREREN
+// --- ORIGINELE BEELDGENERATIE LOGICA ---
+let generationQueue = Promise.resolve();
+
+export const generateMealImage = async (title: string, aiPrompt: string): Promise<string> => {
+  const cacheKey = `qook_img_${btoa(encodeURIComponent(title + aiPrompt)).slice(0, 32)}`;
+  const cached = localStorage.getItem(cacheKey);
+  if (cached) return cached;
+
+  return new Promise((resolve) => {
+    generationQueue = generationQueue.then(async () => {
+      try {
+        await new Promise(r => setTimeout(r, 1200));
+        // We gebruiken de VITE_ prefix voor de frontend
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: MODEL_IMAGE,
+          contents: { 
+            parts: [{ text: `A professional food photography shot of ${title}. ${aiPrompt}. 4k, cinematic lighting.` }] 
+          },
+          config: { imageConfig: { aspectRatio: "1:1" } }
+        });
+
+        const parts = (response as any).candidates?.[0]?.content?.parts || [];
+        let dataUrl = '';
+        for (const part of parts) {
+          if (part.inlineData?.data) {
+            dataUrl = `data:image/png;base64,${part.inlineData.data}`;
+            break;
+          }
+        }
+
+        if (dataUrl) {
+          try { 
+            localStorage.setItem(cacheKey, dataUrl);
+          } catch (e) {
+            Object.keys(localStorage).forEach(key => {
+              if (key.startsWith('qook_img_')) localStorage.removeItem(key);
+            });
+            try { localStorage.setItem(cacheKey, dataUrl); } catch (e2) {}
+          }
+          resolve(dataUrl);
+        } else {
+          throw new Error("No image data");
+        }
+      } catch (error) {
+        // Fallback naar een neutrale kookfoto als de AI-limiet is bereikt
+        resolve(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop`);
+      }
+    });
+  });
+};
+
+// --- BACKEND KOPPELINGEN ---
+
 export const generateWeeklyPlan = async (prefs: UserPreferences): Promise<WeeklyPlan> => {
   const response = await fetch(`${BACKEND_URL}/generate-weekly-plan`, {
     method: 'POST',
@@ -24,7 +80,6 @@ export const generateWeeklyPlan = async (prefs: UserPreferences): Promise<Weekly
   };
 };
 
-// 2. VOLLEDIG RECEPT OPHALEN (Voor MealDetail.tsx)
 export const generateFullRecipe = async (meal: Meal, prefs: UserPreferences): Promise<Meal> => {
   const response = await fetch(`${BACKEND_URL}/get-recipe-details`, {
     method: 'POST',
@@ -38,15 +93,11 @@ export const generateFullRecipe = async (meal: Meal, prefs: UserPreferences): Pr
       language: prefs.language
     }),
   });
-
   if (!response.ok) throw new Error('Fout bij ophalen receptdetails');
   const data = await response.json();
-  
-  // We voegen de details toe aan het bestaande meal object
   return { ...meal, ...data.details };
 };
 
-// 3. GERECHT VERVANGEN
 export const replaceMeal = async (currentMeal: Meal, prefs: UserPreferences, dayIndex: number): Promise<Meal> => {
     const response = await fetch(`${BACKEND_URL}/replace-meal`, {
         method: 'POST',
@@ -62,7 +113,6 @@ export const replaceMeal = async (currentMeal: Meal, prefs: UserPreferences, day
     return { ...data.meal, id: `replaced-${Date.now()}` };
 };
 
-// 4. BOODSCHAPPENLIJST
 export const generateShoppingList = async (meals: Meal[], prefs: UserPreferences): Promise<ShoppingItem[]> => {
     const response = await fetch(`${BACKEND_URL}/generate-shopping-list`, {
         method: 'POST',
@@ -76,7 +126,6 @@ export const generateShoppingList = async (meals: Meal[], prefs: UserPreferences
     return data.items.map((it: any, i: number) => ({ ...it, id: `it-${i}`, checked: false }));
 };
 
-// 5. KOELKAST SCAN
 export const analyzeFridgeImage = async (base64: string, prefs: UserPreferences): Promise<FridgeScanResult> => {
   const response = await fetch(`${BACKEND_URL}/analyze-fridge`, {
     method: 'POST',
@@ -84,9 +133,4 @@ export const analyzeFridgeImage = async (base64: string, prefs: UserPreferences)
     body: JSON.stringify({ image_data: base64, language: prefs.language }),
   });
   return await response.json();
-};
-
-// 6. AFBEELDINGEN (Fallback naar Unsplash voor stabiliteit)
-export const generateMealImage = async (title: string): Promise<string> => {
-  return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${encodeURIComponent(title)}`;
 };
