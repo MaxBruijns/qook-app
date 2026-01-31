@@ -21,25 +21,14 @@ export const MealCard: React.FC<{
     userStatus?: SubscriptionStatus,
     replacementsUsed?: number
 }> = ({ meal, dayIndex, onClick, selectedMealIds, onToggleShopItem, onReplace, t, isLocked, language, isReplacing, showDayLabel = true, userStatus, replacementsUsed = 0 }) => {
-    const [imgUrl, setImgUrl] = useState<string | null>(meal.generated_image_url || null);
-    const [loading, setLoading] = useState(!meal.generated_image_url);
-
-    useEffect(() => {
-        if (imgUrl && meal.generated_image_url === imgUrl) return;
-        let mounted = true;
-        const init = async () => {
-            setLoading(true);
-            const url = await generateMealImage(meal.title, meal.ai_image_prompt);
-            if (mounted) {
-                setImgUrl(url);
-                meal.generated_image_url = url;
-                setLoading(false);
-            }
-        };
-        init();
-        return () => { mounted = false; };
-    }, [meal.id, meal.ai_image_prompt, meal.title, meal.generated_image_url]);
     
+    // 1. Gebruik direct de URL uit de API-mapper
+    const imgUrl = meal.generated_image_url || meal.image_url || meal.image;
+    
+    // 2. Geen laadtijd meer nodig voor AI
+    const loading = false; 
+
+    // 3. Afgeleide variabelen
     const isMealSelected = selectedMealIds.has(meal.id);
     const isCulinary = meal.mode === 'culinary';
     const isMagic = meal.mode === 'magic';

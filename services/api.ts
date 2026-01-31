@@ -93,21 +93,39 @@ export const generateShoppingList = async (meals: any[], prefs: any) => {
 };
 
 async function fetchPlanFromDB(planId: string) {
-    const { data: recipes } = await supabase.from('recipes').select('*').eq('weekly_plan_id', planId).order('day_of_week', { ascending: true });
-    const { data: plan } = await supabase.from('weekly_plans').select('zero_waste_report').eq('id', planId).single();
+    const { data: recipes, error: rError } = await supabase
+        .from('recipes')
+        .select('*')
+        .eq('weekly_plan_id', planId)
+        .order('day_of_week', { ascending: true });
 
-    if (!recipes) return null;
+    const { data: plan } = await supabase
+        .from('weekly_plans')
+        .select('zero_waste_report')
+        .eq('id', planId)
+        .single();
+
+    if (!recipes || rError) return null;
 
     return {
-        days: recipes.map(r => ({
-            ...r,
-            // Hier vertalen we de DB-kolommen naar de Frontend-variabelen:
-            time: r.estimated_time_minutes || r.time || 30, 
-            calories: r.calories_per_portion || r.calories || 500,
-            image_url: r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality, plated")}?width=800&height=600&nologo=true`,
-            ai_image_prompt: r.ai_image_prompt || r.title
-        })),
-        zero_waste_report: plan?.zero_waste_report || '',
+        days: recipes.map((r, index) => {
+            // WATERDICHTE FOTO GENERATIE
+            const photoUrl = r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " professional food photography, 4k, cinematic lighting, plated")}?width=800&height=600&nologo=true`;
+
+            return {
+                ...r,
+                // We vullen alle varianten zodat elke component de foto vindt:
+                image_url: photoUrl,            // Nieuwe standaard
+                generated_image_url: photoUrl,  // Gebruikt door Dashboard.tsx / App.tsx
+                image: photoUrl,                // Gebruikt door sommige UI elementen
+                ai_image_prompt: r.ai_image_prompt || r.title,
+                
+                // Fix voor tijd en kcal:
+                time: r.estimated_time_minutes || r.time || 30,
+                calories: r.calories_per_portion || r.calories || 500
+            };
+        }),
+        zero_waste_report: plan?.zero_waste_report || 'Plan succesvol geladen.',
         generatedAt: new Date().toISOString()
     };
 }
