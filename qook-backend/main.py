@@ -165,12 +165,21 @@ async def generate_weekly_plan(prefs: UserPrefsInput):
         data = json.loads(clean_json(response.text))
         days_list = data if isinstance(data, list) else data.get('days', [])
         
-        # 4. OPSLAAN IN DATABASE (VOOR DE VOLGENDE KEER)
-        # We maken een geldig UUID voor de demo-user zodat de database niet crasht
-        db_user_id = prefs.user_id if prefs.user_id != "demo-user" else "00000000-0000-0000-0000-000000000000"
-        
+        # 4. OPSLAAN IN DATABASE (Sla over voor demo-user om Foreign Key error te voorkomen)
+        if prefs.user_id == "demo-user":
+            print("--- DEMO MODE: PLAN NIET OPSLAAN IN DB ---")
+            return {
+                "status": "success", 
+                "plan_id": "demo-temporary-id", 
+                "days": days_list,
+                "zero_waste_report": data.get('zero_waste_report', '') if isinstance(data, dict) else ""
+            }
+
+        # Voor echte gebruikers gaan we wel opslaan
         plan_record = supabase.table('weekly_plans').insert({
-            "user_id": db_user_id, "week_number": 1, "year": 2025,
+            "user_id": prefs.user_id, 
+            "week_number": 1, 
+            "year": 2025,
             "zero_waste_report": data.get('zero_waste_report', '') if isinstance(data, dict) else ""
         }).execute()
         
