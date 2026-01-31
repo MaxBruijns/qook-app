@@ -108,21 +108,23 @@ async function fetchPlanFromDB(planId: string) {
     if (!recipes || rError) return null;
 
     return {
-        days: recipes.map((r, index) => {
-            // WATERDICHTE FOTO GENERATIE
+        days: recipes.map((r) => {
+            // We genereren de foto-URL één keer
             const photoUrl = r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " professional food photography, 4k, cinematic lighting, plated")}?width=800&height=600&nologo=true`;
 
             return {
-                ...r,
-                // We vullen alle varianten zodat elke component de foto vindt:
-                image_url: photoUrl,            // Nieuwe standaard
-                generated_image_url: photoUrl,  // Gebruikt door Dashboard.tsx / App.tsx
-                image: photoUrl,                // Gebruikt door sommige UI elementen
+                ...r, // Dit zorgt dat r.ingredients en r.steps ongewijzigd blijven!
+                image_url: photoUrl,
+                generated_image_url: photoUrl,
+                image: photoUrl,
                 ai_image_prompt: r.ai_image_prompt || r.title,
                 
-                // Fix voor tijd en kcal:
-                time: r.estimated_time_minutes || r.time || 30,
-                calories: r.calories_per_portion || r.calories || 500
+                // We vullen deze aan voor de weergave in het dashboard
+                estimated_time_minutes: r.estimated_time_minutes || 30,
+                calories_per_portion: r.calories_per_portion || 500,
+                // Sommige componenten zoeken naar 'time' of 'calories'
+                time: r.estimated_time_minutes || 30,
+                calories: r.calories_per_portion || 500
             };
         }),
         zero_waste_report: plan?.zero_waste_report || 'Plan succesvol geladen.',
