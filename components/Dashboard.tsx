@@ -4,7 +4,7 @@ import { Meal, WeeklyPlan, DayMode, SubscriptionStatus, Usage } from '../types';
 import { Card, Badge, Button } from './Shared';
 import { Clock, Flame, ShoppingBag, Sparkles, Check, Lock, Zap, Leaf, RefreshCw, Wine, Wand2, Crown, Star, Loader2, ChevronDown, ChevronUp, UtensilsCrossed, AlertCircle, Info, X } from 'lucide-react';
 import { useTranslation } from '../utils/i18n';
-import { generateMealImage } from '../services/geminiService';
+
 
 export const MealCard: React.FC<{ 
     meal: Meal, 

@@ -109,22 +109,19 @@ async function fetchPlanFromDB(planId: string) {
 
     return {
         days: recipes.map((r) => {
-            // We genereren de foto-URL één keer
-            const photoUrl = r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " professional food photography, 4k, cinematic lighting, plated")}?width=800&height=600&nologo=true`;
+            // Unieke foto per gerecht op basis van de titel
+            const photoUrl = r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality, cinematic lighting")}?width=800&height=600&nologo=true`;
 
             return {
-                ...r, // Dit zorgt dat r.ingredients en r.steps ongewijzigd blijven!
+                ...r, // Behoudt ingrediënten, stappen, etc. uit de DB
                 image_url: photoUrl,
                 generated_image_url: photoUrl,
                 image: photoUrl,
-                ai_image_prompt: r.ai_image_prompt || r.title,
-                
-                // We vullen deze aan voor de weergave in het dashboard
+                // Zorg dat tijd/kcal altijd gevuld zijn voor de UI
+                time: r.estimated_time_minutes || r.time || 30,
+                calories: r.calories_per_portion || r.calories || 500,
                 estimated_time_minutes: r.estimated_time_minutes || 30,
-                calories_per_portion: r.calories_per_portion || 500,
-                // Sommige componenten zoeken naar 'time' of 'calories'
-                time: r.estimated_time_minutes || 30,
-                calories: r.calories_per_portion || 500
+                calories_per_portion: r.calories_per_portion || 500
             };
         }),
         zero_waste_report: plan?.zero_waste_report || 'Plan succesvol geladen.',
