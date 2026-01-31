@@ -23,32 +23,39 @@ interface Props {
     onUnlock: () => void;
 }
 
-// Gebruik direct de URL die we in de api-mapper hebben klaargezet
+export const MealDetail: React.FC<Props> = ({ 
+    meal, isPremium, isFreeMeal, userPrefs, onBack, onStartCooking, onShowPaywall, onToggleList, isSelected, onSelectSuggestion, isFavorite, onToggleFavorite, selectedMealIds, onUnlock
+}) => {
+    const { t } = useTranslation(userPrefs.language || 'nl-NL');
+    
+    // START STATE DEFINITIES
+    const [fullMeal, setFullMeal] = useState<Meal>(meal);
+    const [loading, setLoading] = useState(false);
     const [imgUrl, setImgUrl] = useState<string>(
         meal.generated_image_url || meal.image_url || 'https://images.unsplash.com/photo-1543353071-873f17a7a088'
     );
     
-    const [loading, setLoading] = useState(false);
     const isCulinaryMode = meal.mode === 'culinary';
     const isLocked = !isPremium && !isFreeMeal;
 
+    // EFFECT 1: Update lokale state als de prop verandert
     useEffect(() => {
         setFullMeal(meal);
         const photo = meal.generated_image_url || meal.image_url;
         if (photo) setImgUrl(photo);
     }, [meal]);
 
+    // EFFECT 2: Haal details op als ze nog niet bestaan
     useEffect(() => {
         const fetchDetails = async () => {
             if (isLocked) return;
-            // Als de data al in de database-recepten staat, stop hier
+            // Stop als de data al aanwezig is (database recepten)
             if (fullMeal.steps && fullMeal.steps.length > 0 && fullMeal.ingredients && fullMeal.ingredients.length > 0) {
                 return;
             }
             
             setLoading(true);
             try {
-                // Roep de backend aan, niet direct Google
                 const detailed = await generateFullRecipe(meal, userPrefs);
                 setFullMeal(prev => ({ ...prev, ...detailed }));
             } catch (e) {
