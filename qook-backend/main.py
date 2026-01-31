@@ -97,7 +97,6 @@ async def generate_weekly_plan(prefs: UserPrefsInput):
     prompt = f"""
     ROLE: Chef Qook. TASK: Generate 7-DAY MENU (Day 0-6).
     LANG: {prefs.language}.
-    
     AGENDA: {modes_desc} (Default: premium).
     ZERO-WASTE: {prefs.zeroWasteLevel}%. Include 'zero_waste_report'.
     PREFS: Diet: {prefs.diet}, Household: {prefs.adultsCount}+{prefs.childrenCount}, Budget: {prefs.budget}.
@@ -116,36 +115,57 @@ async def generate_weekly_plan(prefs: UserPrefsInput):
                 "calories_per_portion": 600,
                 "mode": "premium"
             }}
-            ... (7 days)
         ]
     }}
     """
     
     try:
+        # 1. AI genereert het plan
         response = model.generate_content(prompt)
         data = json.loads(clean_json(response.text))
         
-        # Opslaan
-        plan = supabase.table('weekly_plans').insert({
-            "user_id": prefs.user_id, "week_number": 1, "year": 2025,
-            "zero_waste_report": data.get('zero_waste_report', '')
-        }).execute()
-        plan_id = plan.data[0]['id']
-        
-        for d in data.get('days', []):
-            supabase.table('recipes').insert({
-                'weekly_plan_id': plan_id,
-                'day_of_week': str(d.get('day_number')),
-                'title': d.get('title'),
-                'short_description': d.get('short_description'),
-                'image_keywords': d.get('ai_image_prompt'),
-                'estimated_time_minutes': d.get('estimated_time_minutes'),
-                'difficulty': d.get('difficulty'),
-                'calories_per_portion': d.get('calories_per_portion'),
-                'mode': d.get('mode')
-            }).execute()
+        # Voeg een tijdelijke ID toe voor de frontend
+        plan_id = "temp-demo-id" 
 
-        return {"status": "success", "plan_id": plan_id}
+        # 2. Alleen opslaan als het een échte user is (geen demo-user)
+        # We checken of de ID een streepje bevat (UUID kenmerk) of simpelweg geen "demo-user" is
+        if prefs.user_id != "demo-user":
+            try:
+                plan_record = supabase.table('weekly_plans').insert({
+                    "user_id": prefs.user_id, 
+                    "week_number": 1, 
+                    "year": 2025,
+                    "zero_waste_report": data.get('zero_waste_report', '')
+                }).execute()
+                
+                if plan_record.data:
+                    plan_id = plan_record.data[0]['id']
+                    
+                    # Sla ook de recepten op
+                    for d in data.get('days', []):
+                        supabase.table('recipes').insert({
+                            'weekly_plan_id': plan_id,
+                            'day_of_week': str(d.get('day_number')),
+                            'title': d.get('title'),
+                            'short_description': d.get('short_description'),
+                            'image_keywords': d.get('ai_image_prompt'),
+                            'estimated_time_minutes': d.get('estimated_time_minutes'),
+                            'difficulty': d.get('difficulty'),
+                            'calories_per_portion': d.get('calories_per_portion'),
+                            'mode': d.get('mode')
+                        }).execute()
+            except Exception as db_err:
+                print(f"Database error (overgeslagen): {db_err}")
+
+        # 3. BELANGRIJK: Stuur de 'data' (het menu) zelf terug!
+        # De frontend heeft de inhoud nodig om het dashboard te vullen.
+        return {
+            "status": "success", 
+            "plan_id": plan_id, 
+            "days": data.get('days'), 
+            "zero_waste_report": data.get('zero_waste_report')
+        }
+
     except Exception as e:
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
