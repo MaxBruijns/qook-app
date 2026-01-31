@@ -24,6 +24,21 @@ export const generateWeeklyPlan = async (prefs: any) => {
     
     if (!res.ok) throw new Error("Backend Error");
     const data = await res.json();
+
+    // --- CRUCIALE AANPASSING VOOR DEMO ---
+    // Als de backend zegt dat het een demo is of een hergebruikt plan uit de bank:
+    if (data.plan_id === "demo-temporary-id" || data.plan_id === "reused-from-bank") {
+        return {
+            days: data.days.map((r: any) => ({
+                ...r,
+                ai_image_prompt: r.title // Gebruik titel als backup voor de foto
+            })),
+            zero_waste_report: data.zero_waste_report || 'Geselecteerd uit de Qook receptenbank.',
+            generatedAt: new Date().toISOString()
+        };
+    }
+
+    // Alleen voor geregistreerde gebruikers die echt opslaan:
     return await fetchPlanFromDB(data.plan_id);
 };
 
