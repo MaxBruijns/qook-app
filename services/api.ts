@@ -105,19 +105,30 @@ export const generateShoppingList = async (meals: any[], prefs: any) => {
 
 // --- DB MAPPER ---
 async function fetchPlanFromDB(planId: string) {
-    const { data: recipes } = await supabase.from('recipes').select('*').eq('weekly_plan_id', planId).order('day_of_week', { ascending: true });
-    const { data: plan } = await supabase.from('weekly_plans').select('zero_waste_report').eq('id', planId).single();
+    const { data: recipes } = await supabase
+        .from('recipes')
+        .select('*')
+        .eq('weekly_plan_id', planId)
+        .order('day_of_week', { ascending: true });
+
+    const { data: plan } = await supabase
+        .from('weekly_plans')
+        .select('zero_waste_report')
+        .eq('id', planId)
+        .single();
 
     if (!recipes) return null;
 
     return {
         days: recipes.map(r => ({
             ...r,
-            ai_image_prompt: r.image_keywords
+            // AI Studio gebruikte 'image_url' of 'ai_image_prompt'.
+            // We zorgen hier dat er ALTIJD een werkende link ontstaat.
+            image_url: r.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality, plated") }?width=800&height=600&nologo=true`,
+            ai_image_prompt: r.ai_image_prompt || r.title
         })),
         zero_waste_report: plan?.zero_waste_report || '',
         generatedAt: new Date().toISOString()
     };
-}
 
 export const generateDayPlan = async () => null;
