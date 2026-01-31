@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Meal, UserPreferences } from '../types';
-import { generateFullRecipe, generateMealImage } from '../services/geminiService';
+import { generateFullRecipe } from '../services/api';
 import { Button, Badge, Card } from './Shared';
 import { Clock, Flame, ArrowLeft, Lock, Utensils, Play, Check, Heart, Wine, Plus, Coffee, Sparkles, User, Mail, Key, Users, Zap, Star, Package, Layout, Wrench } from 'lucide-react';
 import { useTranslation } from '../utils/i18n';
@@ -23,36 +23,32 @@ interface Props {
     onUnlock: () => void;
 }
 
-export const MealDetail: React.FC<Props> = ({ 
-    meal, isPremium, isFreeMeal, userPrefs, onBack, onStartCooking, onShowPaywall, onToggleList, isSelected, onSelectSuggestion, isFavorite, onToggleFavorite, selectedMealIds, onUnlock
-}) => {
-    const { t } = useTranslation(userPrefs.language || 'nl-NL');
-    const [fullMeal, setFullMeal] = useState<Meal>(meal);
+// Gebruik direct de URL die we in de api-mapper hebben klaargezet
+    const [imgUrl, setImgUrl] = useState<string>(
+        meal.generated_image_url || meal.image_url || 'https://images.unsplash.com/photo-1543353071-873f17a7a088'
+    );
+    
     const [loading, setLoading] = useState(false);
-    
-    const [imgUrl, setImgUrl] = useState<string>(meal.generated_image_url || 'https://images.unsplash.com/photo-1543353071-873f17a7a088?q=80&w=800&auto=format&fit=crop');
-    
     const isCulinaryMode = meal.mode === 'culinary';
     const isLocked = !isPremium && !isFreeMeal;
 
     useEffect(() => {
         setFullMeal(meal);
-        if (meal.generated_image_url) {
-            setImgUrl(meal.generated_image_url);
-        } else {
-            generateMealImage(meal.title, meal.ai_image_prompt || meal.title).then(url => {
-                setImgUrl(url);
-                meal.generated_image_url = url;
-            });
-        }
+        const photo = meal.generated_image_url || meal.image_url;
+        if (photo) setImgUrl(photo);
     }, [meal]);
 
     useEffect(() => {
         const fetchDetails = async () => {
             if (isLocked) return;
-            if (fullMeal.steps && fullMeal.ingredients) return;
+            // Als de data al in de database-recepten staat, stop hier
+            if (fullMeal.steps && fullMeal.steps.length > 0 && fullMeal.ingredients && fullMeal.ingredients.length > 0) {
+                return;
+            }
+            
             setLoading(true);
             try {
+                // Roep de backend aan, niet direct Google
                 const detailed = await generateFullRecipe(meal, userPrefs);
                 setFullMeal(prev => ({ ...prev, ...detailed }));
             } catch (e) {
@@ -62,7 +58,7 @@ export const MealDetail: React.FC<Props> = ({
             }
         };
         fetchDetails();
-    }, [meal, isLocked, userPrefs, fullMeal.steps]);
+    }, [meal, isLocked, userPrefs]);
 
     return (
         <div className={`min-h-screen pb-40 animate-in slide-in-from-right-10 duration-500 relative ${isCulinaryMode ? 'bg-kooq-dark' : 'bg-white'}`}>
