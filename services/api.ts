@@ -94,26 +94,40 @@ export const generateShoppingList = async (meals: any[], prefs: any) => {
 
 // services/api.ts
 async function fetchPlanFromDB(planId: string) {
-    const { data: recipes } = await supabase.from('recipes').select('*').eq('weekly_plan_id', planId).order('day_of_week', { ascending: true });
-    
-    if (!recipes) return null;
+    const { data: recipes, error: rError } = await supabase
+        .from('recipes')
+        .select('*')
+        .eq('weekly_plan_id', planId)
+        .order('day_of_week', { ascending: true });
+
+    const { data: plan } = await supabase
+        .from('weekly_plans')
+        .select('zero_waste_report')
+        .eq('id', planId)
+        .single();
+
+    if (!recipes || rError) return null;
 
     return {
-        days: recipes.map(r => {
-            // Als er geen foto in de DB staat, maken we er hier ter plekke één
-            const fallbackPhoto = `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality")}?width=800&height=600&nologo=true`;
-            
+        days: recipes.map((r) => {
+            // Als de database NULL geeft voor image_url, maken we hier de link:
+            const generatedUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(r.title + " gourmet food photography, high quality, cinematic lighting")}?width=800&height=600&nologo=true`;
+
             return {
-                ...r,
-                // We vullen ALLE varianten in zodat de MealCard nooit misgrijpt
-                generated_image_url: r.image_url || r.generated_image_url || fallbackPhoto,
-                image_url: r.image_url || fallbackPhoto,
-                image: r.image_url || fallbackPhoto,
-                // Fix voor tijd en kcal
+                ...r, // Behoudt ingrediënten en stappen
+                // We vullen alle mogelijke namen zodat het Dashboard altijd beeld heeft
+                image_url: r.image_url || generatedUrl,
+                generated_image_url: r.image_url || generatedUrl,
+                image: r.image_url || generatedUrl,
+                
+                // Zorg dat tijd en kcal ook namen hebben die de frontend begrijpt
                 estimated_time_minutes: r.estimated_time_minutes || 30,
-                calories_per_portion: r.calories_per_portion || 500
+                calories_per_portion: r.calories_per_portion || 500,
+                time: r.estimated_time_minutes || 30,
+                calories: r.calories_per_portion || 500
             };
         }),
+        zero_waste_report: plan?.zero_waste_report || 'Plan geladen uit receptenbank.',
         generatedAt: new Date().toISOString()
     };
 }
