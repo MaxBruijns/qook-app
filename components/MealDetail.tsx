@@ -1,9 +1,8 @@
-
 import React, { useEffect, useState } from 'react';
 import { Meal, UserPreferences } from '../types';
 import { generateFullRecipe } from '../services/api';
 import { Button, Badge, Card } from './Shared';
-import { Clock, Flame, ArrowLeft, Lock, Utensils, Play, Check, Heart, Wine, Plus, Coffee, Sparkles, User, Mail, Key, Users, Zap, Star, Package, Layout, Wrench } from 'lucide-react';
+import { Clock, Flame, ArrowLeft, Lock, Utensils, Play, Check, Heart, Wine, Plus, Coffee, Sparkles, User, Mail, Key, Users, Zap, Star, Package, Layout, Wrench, Loader2 } from 'lucide-react';
 import { useTranslation } from '../utils/i18n';
 
 interface Props {
@@ -28,47 +27,64 @@ export const MealDetail: React.FC<Props> = ({
 }) => {
     const { t } = useTranslation(userPrefs.language || 'nl-NL');
     
-    // START STATE DEFINITIES
     const [fullMeal, setFullMeal] = useState<Meal>(meal);
     const [loading, setLoading] = useState(false);
+    
+    // 1. BEELD LOGICA (Met fallback naar Pollinations als alles ontbreekt)
+    const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(meal.title + " gourmet food photography, cinematic lighting")}?width=800&height=600&nologo=true`;
     const [imgUrl, setImgUrl] = useState<string>(
-        meal.generated_image_url || meal.image_url || 'https://images.unsplash.com/photo-1543353071-873f17a7a088'
+        meal.image_url || meal.generated_image_url || meal.image || fallbackUrl
     );
     
+    // 2. DISPLAY CONSTANTS (Fallbacks voor DB vs AI veldnamen)
+    const displayTime = fullMeal.estimated_time_minutes || (fullMeal as any).time || 30;
+    const displayKcal = fullMeal.calories_per_portion || (fullMeal as any).calories || 500;
+    const servings = fullMeal.servings || userPrefs.adultsCount + userPrefs.childrenCount || 2;
+
     const isCulinaryMode = meal.mode === 'culinary';
     const isLocked = !isPremium && !isFreeMeal;
 
     // EFFECT 1: Update lokale state als de prop verandert
     useEffect(() => {
         setFullMeal(meal);
-        const photo = meal.generated_image_url || meal.image_url;
-        if (photo) setImgUrl(photo);
+        const photo = meal.image_url || meal.generated_image_url || meal.image || fallbackUrl;
+        setImgUrl(photo);
     }, [meal]);
 
-    // EFFECT 2: Haal details op als ze nog niet bestaan
+    // EFFECT 2: Smart Save & Fetch Details
     useEffect(() => {
         const fetchDetails = async () => {
             if (isLocked) return;
-            // Stop als de data al aanwezig is (database recepten)
-            if (fullMeal.steps && fullMeal.steps.length > 0 && fullMeal.ingredients && fullMeal.ingredients.length > 0) {
-                return;
+
+            // SMART SAVE: Als de afbeelding een Pollinations link is, sla hem op in de DB
+            if (!meal.image_url && imgUrl.includes('pollinations') && !meal.id.toString().startsWith('meal-')) {
+                fetch('https://qook-backend.onrender.com/save-meal-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ meal_id: meal.id, image_data: imgUrl })
+                }).catch(err => console.error("Kon afbeelding niet opslaan in bank", err));
             }
+
+            // FETCH DETAILS: Alleen als we nog geen stappen of ingrediënten hebben
+            const hasDetails = fullMeal.steps && fullMeal.steps.length > 0 && fullMeal.ingredients && fullMeal.ingredients.length > 0;
+            if (hasDetails) return;
             
             setLoading(true);
             try {
                 const detailed = await generateFullRecipe(meal, userPrefs);
                 setFullMeal(prev => ({ ...prev, ...detailed }));
             } catch (e) {
-                console.error("Failed to load recipe", e);
+                console.error("Failed to load recipe details", e);
             } finally {
                 setLoading(false);
             }
         };
         fetchDetails();
-    }, [meal, isLocked, userPrefs]);
+    }, [meal.id, isLocked]);
 
     return (
         <div className={`min-h-screen pb-40 animate-in slide-in-from-right-10 duration-500 relative ${isCulinaryMode ? 'bg-kooq-dark' : 'bg-white'}`}>
+            {/* Header / Cover Image */}
             <div className="relative h-72 md:h-96 w-full overflow-hidden bg-kooq-white">
                 <img src={imgUrl} className="w-full h-full object-cover" alt={meal.title} />
                 <div className={`absolute inset-0 bg-gradient-to-t ${isCulinaryMode ? 'from-kooq-dark via-kooq-dark/20' : 'from-black/60'} to-transparent`}></div>
@@ -91,16 +107,19 @@ export const MealDetail: React.FC<Props> = ({
                         {meal.mode === 'magic' && <Badge variant="free">{t.choice_scan_title}</Badge>}
                      </div>
                      <h1 className="text-4xl font-sans font-black tracking-tighter leading-none mb-2">{meal.title}</h1>
-                     <div className="flex items-center gap-4 opacity-70 text-xs font-sans font-black">
-                        <span className="flex items-center gap-1.5"><Clock size={14} /> {meal.estimated_time_minutes} {t.unit_min}</span>
-                        <span className="flex items-center gap-1.5"><Users size={14} /> {fullMeal.servings} {t.adults.toLowerCase()}</span>
+                     <div className="flex items-center gap-4 opacity-70 text-[10px] font-sans font-black uppercase tracking-widest">
+                        <span className="flex items-center gap-1.5"><Clock size={14} /> {displayTime} {t.unit_min}</span>
+                        <span className="flex items-center gap-1.5"><Users size={14} /> {servings} {t.adults.toLowerCase()}</span>
+                        <span className="flex items-center gap-1.5"><Flame size={14} /> {displayKcal} {t.unit_kcal}</span>
                      </div>
                 </div>
             </div>
 
+            {/* Content Section */}
             <div className={`max-w-4xl mx-auto -mt-10 relative ${isCulinaryMode ? 'bg-kooq-dark text-white' : 'bg-white'} rounded-t-[3rem] px-6 md:px-12 pt-10 shadow-2xl`}>
                 <p className={`text-lg leading-relaxed mb-10 font-medium ${isCulinaryMode ? 'text-white/80' : 'text-kooq-slate'}`}>{meal.short_description}</p>
 
+                {/* Wine Pairing */}
                 {isCulinaryMode && fullMeal.wine_pairing && !isLocked && (
                     <div className="bg-white/5 backdrop-blur-xl p-8 rounded-[2.5rem] mb-10 border border-white/10 shadow-2xl relative overflow-hidden group">
                         <div className="absolute top-0 right-0 w-32 h-32 bg-kooq-clementine opacity-20 blur-3xl -translate-y-1/2 translate-x-1/2"></div>
@@ -117,6 +136,7 @@ export const MealDetail: React.FC<Props> = ({
                     </div>
                 )}
 
+                {/* Plating Tips */}
                 {isCulinaryMode && fullMeal.plating_tips && !isLocked && (
                     <div className="bg-kooq-clementine/10 p-8 rounded-[2.5rem] mb-10 border border-kooq-clementine/20 shadow-sm relative overflow-hidden group">
                         <div className="relative z-10 flex gap-6 items-center">
@@ -144,12 +164,13 @@ export const MealDetail: React.FC<Props> = ({
                     <>
                         {loading ? (
                             <div className="flex flex-col items-center py-24">
-                                <div className={`w-12 h-12 border-4 ${isCulinaryMode ? 'border-kooq-clementine' : 'border-kooq-sage'} border-t-transparent rounded-full animate-spin mb-6`}></div>
+                                <Loader2 size={48} className={`mb-6 ${isCulinaryMode ? 'text-kooq-clementine' : 'text-kooq-sage'} animate-spin`} />
                                 <p className={`${isCulinaryMode ? 'text-white/40' : 'text-kooq-slate'} font-sans font-black tracking-widest uppercase text-xs`}>{t.loading_recipe}</p>
                             </div>
                         ) : (
                             <div className="flex flex-col gap-12">
                                 <div className="grid md:grid-cols-2 gap-12">
+                                    {/* Ingredients */}
                                     <section>
                                         <div className="space-y-12">
                                             <div>
@@ -167,24 +188,10 @@ export const MealDetail: React.FC<Props> = ({
                                                     ))}
                                                 </ul>
                                             </div>
-
-                                            {fullMeal.supplies && fullMeal.supplies.length > 0 && (
-                                                <div className="animate-in fade-in duration-700">
-                                                    <h3 className={`text-2xl font-sans font-black mb-6 flex items-center gap-3 tracking-tighter ${isCulinaryMode ? 'text-white' : 'text-kooq-dark'}`}>
-                                                        <Wrench size={24} className={isCulinaryMode ? 'text-kooq-clementine' : 'text-kooq-sage'} /> {t.supplies}
-                                                    </h3>
-                                                    <div className="flex flex-wrap gap-2">
-                                                        {fullMeal.supplies.map((item, i) => (
-                                                            <span key={i} className={`px-4 py-2 rounded-xl text-[10px] font-sans font-black tracking-widest border ${isCulinaryMode ? 'bg-white/5 border-white/10 text-white/70' : 'bg-kooq-white border-kooq-slate/5 text-kooq-slate'} uppercase`}>
-                                                                {item}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            )}
                                         </div>
                                     </section>
 
+                                    {/* Preparation Steps */}
                                     <section>
                                         <h3 className={`text-2xl font-sans font-black mb-6 tracking-tighter ${isCulinaryMode ? 'text-white' : 'text-kooq-dark'}`}>{t.preparation}</h3>
                                         <div className="space-y-8">

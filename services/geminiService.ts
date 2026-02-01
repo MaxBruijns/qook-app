@@ -2,13 +2,13 @@ import { GoogleGenAI } from "@google/genai";
 import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult } from "../types";
 
 const BACKEND_URL = 'https://qook-backend.onrender.com';
-const MODEL_IMAGE = 'gemini-2.0-flash-image'; // Of jouw specifieke model
+const MODEL_IMAGE = 'gemini-2.0-flash-image'; 
 
-// --- ORIGINELE BEELDGENERATIE LOGICA ---
 let generationQueue = Promise.resolve();
 
-export const generateMealImage = async (title: string, aiPrompt: string): Promise<string> => {
-  const cacheKey = `qook_img_${btoa(encodeURIComponent(title + aiPrompt)).slice(0, 32)}`;
+// 1. BEELDGENERATIE + AUTOMATISCH OPSLAAN IN DB
+export const generateMealImage = async (mealId: string, title: string, aiPrompt: string): Promise<string> => {
+  const cacheKey = `qook_img_${mealId}`;
   const cached = localStorage.getItem(cacheKey);
   if (cached) return cached;
 
@@ -16,7 +16,6 @@ export const generateMealImage = async (title: string, aiPrompt: string): Promis
     generationQueue = generationQueue.then(async () => {
       try {
         await new Promise(r => setTimeout(r, 1200));
-        // We gebruiken de VITE_ prefix voor de frontend
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         const ai = new GoogleGenAI({ apiKey });
         const response = await ai.models.generateContent({
@@ -37,28 +36,29 @@ export const generateMealImage = async (title: string, aiPrompt: string): Promis
         }
 
         if (dataUrl) {
-          try { 
-            localStorage.setItem(cacheKey, dataUrl);
-          } catch (e) {
-            Object.keys(localStorage).forEach(key => {
-              if (key.startsWith('qook_img_')) localStorage.removeItem(key);
-            });
-            try { localStorage.setItem(cacheKey, dataUrl); } catch (e2) {}
+          // SMART SAVE: Stuur de gegenereerde foto naar de backend om de bank te vullen
+          if (mealId && !mealId.toString().startsWith('meal-')) {
+            fetch(`${BACKEND_URL}/save-meal-image`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ meal_id: mealId, image_data: dataUrl })
+            }).catch(err => console.error("Kon image niet opslaan in bank:", err));
           }
+
+          try { localStorage.setItem(cacheKey, dataUrl); } catch (e) {}
           resolve(dataUrl);
         } else {
           throw new Error("No image data");
         }
       } catch (error) {
-        // Fallback naar een neutrale kookfoto als de AI-limiet is bereikt
-        resolve(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop`);
+        // Fallback naar Pollinations (gratis/snel) als Gemini Image limiet bereikt is
+        resolve(`https://image.pollinations.ai/prompt/${encodeURIComponent(title + " gourmet food")}?width=800&height=800&nologo=true`);
       }
     });
   });
 };
 
-// --- BACKEND KOPPELINGEN ---
-
+// 2. WEEKMENU GENEREREN (Via Backend)
 export const generateWeeklyPlan = async (prefs: UserPreferences): Promise<WeeklyPlan> => {
   const response = await fetch(`${BACKEND_URL}/generate-weekly-plan`, {
     method: 'POST',
@@ -70,17 +70,25 @@ export const generateWeeklyPlan = async (prefs: UserPreferences): Promise<Weekly
   const data = await response.json();
 
   return {
+    id: data.plan_id,
     days: (data.days || []).map((m: any, i: number) => ({
       ...m,
+      // Fallbacks voor data uit database vs data van AI
       id: m.id || `meal-${i}-${Math.random().toString(36).slice(2, 7)}`,
       servings: prefs.adultsCount + prefs.childrenCount,
+      estimated_time_minutes: m.estimated_time_minutes || m.time || 30,
+      calories_per_portion: m.calories_per_portion || m.calories || 500
     })),
     zero_waste_report: data.zero_waste_report,
     generatedAt: new Date().toISOString()
   };
 };
 
+// 3. VOLLEDIG RECEPT OPHALEN
 export const generateFullRecipe = async (meal: Meal, prefs: UserPreferences): Promise<Meal> => {
+  // Als we de details al hebben, AI niet lastigvallen
+  if (meal.steps && meal.steps.length > 0) return meal;
+
   const response = await fetch(`${BACKEND_URL}/get-recipe-details`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -93,11 +101,13 @@ export const generateFullRecipe = async (meal: Meal, prefs: UserPreferences): Pr
       language: prefs.language
     }),
   });
+  
   if (!response.ok) throw new Error('Fout bij ophalen receptdetails');
   const data = await response.json();
   return { ...meal, ...data.details };
 };
 
+// 4. OVERIGE BACKEND FUNCTIES
 export const replaceMeal = async (currentMeal: Meal, prefs: UserPreferences, dayIndex: number): Promise<Meal> => {
     const response = await fetch(`${BACKEND_URL}/replace-meal`, {
         method: 'POST',
