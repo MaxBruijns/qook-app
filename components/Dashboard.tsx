@@ -3,6 +3,7 @@ import { Meal, WeeklyPlan, DayMode, SubscriptionStatus, Usage } from '../types';
 import { Card, Badge, Button } from './Shared';
 import { Clock, Flame, ShoppingBag, Sparkles, Check, Lock, RefreshCw, Wine, Star, Loader2, ChevronDown, ChevronUp, Leaf, X } from 'lucide-react';
 import { useTranslation } from '../utils/i18n';
+import { generateMealImage } from '../services/api'; // Importeer de centrale image functie
 
 // Sub-component voor een individueel gerecht
 export const MealCard: React.FC<{ 
@@ -22,24 +23,38 @@ export const MealCard: React.FC<{
 }> = ({ meal, dayIndex, onClick, selectedMealIds, onToggleShopItem, onReplace, t, isLocked, language, isReplacing, showDayLabel = true, userStatus, replacementsUsed = 0 }) => {
     
     // 1. AFBEELDING LOGICA
-    // We kijken eerst in de database (image_url), dan naar de AI-prompt generatie
-    const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(meal.title + " gourmet food photography, high quality, cinematic lighting")}?width=800&height=600&nologo=true`;
-    const imgUrl = meal.image_url || meal.generated_image_url || meal.image || fallbackUrl;
-    
-    // 2. DATA FALLBACKS (Voor compatibiliteit tussen DB en AI namen)
+    const [imgUrl, setImgUrl] = useState<string | null>(meal.image_url || meal.generated_image_url || meal.image || null);
+    const [isGenerating, setIsGenerating] = useState(false);
+
+    useEffect(() => {
+        const loadImage = async () => {
+            // Als er al een URL is en het is geen oude Pollinations link, stop dan.
+            if (imgUrl && !imgUrl.includes('pollinations')) return;
+
+            // Roep Gemini aan via de API service
+            setIsGenerating(true);
+            try {
+                const newUrl = await generateMealImage(
+                    meal.id, 
+                    meal.title, 
+                    meal.ai_image_prompt || meal.title,
+                    meal.image_url
+                );
+                setImgUrl(newUrl);
+            } catch (err) {
+                console.error("Fout bij laden afbeelding:", err);
+                // Fallback naar een kwalitatieve Unsplash foto als Gemini faalt
+                setImgUrl(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop`);
+            } finally {
+                setIsGenerating(false);
+            }
+        };
+        loadImage();
+    }, [meal.id, meal.image_url]);
+
+    // 2. DATA FALLBACKS
     const displayTime = meal.estimated_time_minutes || (meal as any).time || 30;
     const displayKcal = meal.calories_per_portion || (meal as any).calories || 500;
-
-    // 3. SMART SAVE: Als de foto gegenereerd is maar nog niet in de DB staat, sla hem op in de bank
-    useEffect(() => {
-        if (!meal.image_url && imgUrl.includes('pollinations') && !meal.id.toString().startsWith('meal-')) {
-            fetch('https://qook-backend.onrender.com/save-meal-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ meal_id: meal.id, image_data: imgUrl })
-            }).catch(err => console.error("Kon afbeelding niet opslaan in receptenbank:", err));
-        }
-    }, [meal.id, imgUrl]);
 
     const isMealSelected = selectedMealIds.has(meal.id);
     const isCulinary = meal.mode === 'culinary';
@@ -67,9 +82,10 @@ export const MealCard: React.FC<{
                 </div>
             )}
             
-            {isReplacing && ( 
-                <div className="absolute inset-0 z-30 bg-white/60 backdrop-blur-sm flex items-center justify-center">
+            {(isReplacing || isGenerating) && ( 
+                <div className="absolute inset-0 z-30 bg-white/60 backdrop-blur-sm flex items-center justify-center flex-col gap-2">
                     <RefreshCw size={32} className="text-kooq-sage animate-spin" />
+                    {isGenerating && <span className="text-[8px] font-black uppercase tracking-widest text-kooq-sage">Chef fotografeert...</span>}
                 </div> 
             )}
             
@@ -84,11 +100,17 @@ export const MealCard: React.FC<{
             </div>
 
             <div className="relative h-60 overflow-hidden bg-kooq-sand/10">
-                <img 
-                    src={imgUrl} 
-                    alt={meal.title} 
-                    className={`w-full h-full object-cover transition-transform duration-[2000ms] group-hover:scale-110 ${isCulinary ? 'opacity-90' : ''}`} 
-                />
+                {imgUrl ? (
+                    <img 
+                        src={imgUrl} 
+                        alt={meal.title} 
+                        className={`w-full h-full object-cover transition-transform duration-[2000ms] group-hover:scale-110 ${isCulinary ? 'opacity-90' : ''}`} 
+                    />
+                ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                        <Loader2 className="animate-spin text-kooq-sage/20" size={24} />
+                    </div>
+                )}
                 {isCulinary && <div className="absolute inset-0 bg-gradient-to-t from-kooq-dark/80 to-transparent" />}
             </div>
 
@@ -143,7 +165,6 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
   const hasPayingStatus = userStatus === 'premium' || userStatus === 'culinary' || userStatus === 'basic';
   const planId = plan?.days?.[0]?.id || 'initial';
 
-  // VEILIGHEIDSCHECK: Als plan null is (door backend error), toon een laadscherm of error
   if (!plan || !plan.days) {
     return (
         <div className="min-h-[60vh] flex flex-col items-center justify-center text-center p-10">
@@ -155,7 +176,6 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
 
   return (
     <div className="p-6 pb-32 max-w-7xl mx-auto space-y-12">
-      {/* Trial / Info Banner */}
       {isTrialActive && (
         <div className="bg-kooq-sage/10 border border-kooq-sage/20 rounded-[2rem] p-6 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
@@ -177,7 +197,6 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
         </div>
       )}
 
-      {/* Zero-Waste Report */}
       {hasPayingStatus && plan.zero_waste_report && reportDismissedFor !== planId && (
         <div className="bg-white rounded-[2.5rem] p-8 border border-kooq-sage/20 shadow-xl relative flex flex-col md:flex-row items-center gap-8">
             <button onClick={() => setReportDismissedFor(planId)} className="absolute top-6 right-6 p-2 text-kooq-slate/30 hover:text-kooq-slate transition-all">
@@ -193,7 +212,6 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
         </div>
       )}
 
-      {/* Weekmenu Grid */}
       <section>
           <div className="mb-10 flex flex-col border-b border-kooq-slate/10 pb-6">
               <h2 className="text-4xl font-sans font-black text-kooq-dark tracking-tighter mb-2">
@@ -224,7 +242,6 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
           </div>
       </section>
 
-      {/* Boodschappenlijst Floating Action Button */}
       {selectedMealIds.size > 0 && (
           <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-40 w-full max-w-md px-6">
               <button 
