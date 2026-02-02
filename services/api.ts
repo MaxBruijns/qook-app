@@ -5,17 +5,20 @@ const API_URL = 'https://qook-backend.onrender.com';
 
 // 1. BEELDGENERATIE VIA GEMINI + SMART SAVE
 export const generateMealImage = async (mealId: string, title: string, aiPrompt: string, existingUrl?: string): Promise<string> => {
-    // Stap 1: Als er al een echte foto in de database staat, gebruik die direct (GRATIS)
-    // We negeren oude Pollinations links
-    if (existingUrl && existingUrl.startsWith('http') && !existingUrl.includes('pollinations')) {
+    if (existingUrl && existingUrl.startsWith('http') && !existingUrl.includes('unsplash') && !existingUrl.includes('pollinations')) {
         return existingUrl;
     }
 
-    try {
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (!apiKey) throw new Error("VITE_GEMINI_API_KEY ontbreekt in Vercel settings");
+    // HAAL DE KEY HIER OP, NIET BOVENIN HET BESTAND
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    
+    if (!apiKey) {
+        console.error("DEBUG: VITE_GEMINI_API_KEY is leeg in de browser!");
+        return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${mealId}`;
+    }
 
-        const genAI = new GoogleGenAI(apiKey);
+    try {
+        const genAI = new GoogleGenAI(apiKey); // Initialiseer hier pas
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         
         const prompt = `A professional gourmet food photography shot of ${title}. ${aiPrompt}. 4k, cinematic lighting, high quality plated dish, culinary masterpiece.`;
