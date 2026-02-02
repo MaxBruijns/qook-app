@@ -23,20 +23,17 @@ export const MealDetail: React.FC<any> = ({
     // EFFECT 1: Afbeelding laden/genereren via de centrale API service
 useEffect(() => {
     const loadImage = async () => {
-        // Alleen laden als we nog geen goede URL hebben
-        if (imgUrl && !imgUrl.includes('pollinations') && imgUrl !== '') return;
+        // Logica: als de URL niet begint met 'data:image', 
+        // dan beschouwen we hem als 'niet aanwezig' of 'foutief'.
+        if (imgUrl && imgUrl.startsWith('data:image')) return;
 
-        try {
-            const url = await generateMealImage(
-                meal.id, 
-                meal.title, 
-                meal.ai_image_prompt || meal.title,
-                meal.image_url
-            );
-            setImgUrl(url);
-        } catch (e) {
-            setImgUrl(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${meal.id}`);
-        }
+        const url = await generateMealImage(
+            meal.id, 
+            meal.title, 
+            meal.ai_image_prompt || meal.title,
+            meal.image_url
+        );
+        setImgUrl(url);
     };
     loadImage();
 }, [meal.id]);

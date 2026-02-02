@@ -3,12 +3,34 @@ import { supabase } from '../utils/supabase';
 const API_URL = 'https://qook-backend.onrender.com';
 
 // 1. AFBEELDINGEN (Backend levert nu de URL, dit is alleen een fallback)
-export const generateMealImage = async (mealId: string, title: string, prompt: string, existingUrl?: string): Promise<string> => {
-    // Gebruik de URL die de backend heeft klaargezet
-    if (existingUrl && !existingUrl.includes('pollinations')) return existingUrl;
-    
-    // Als er echt niets is, een nette Unsplash fallback op basis van de titel
-    return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${mealId}`;
+eexport const generateMealImage = async (mealId: string, title: string, aiPrompt: string, existingUrl?: string): Promise<string> => {
+    // Als er al een geldige data-url of http link in de DB staat, gebruik die direct.
+    if (existingUrl && existingUrl.startsWith('data:image')) {
+        return existingUrl;
+    }
+
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${mealId}`;
+
+    try {
+        const genAI = new GoogleGenAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const result = await model.generateContent(`Professional food photography of ${title}. ${aiPrompt}`);
+        const response = await result.response;
+        const dataUrl = `data:image/png;base64,${(response as any).candidates[0].content.parts[0].inlineData.data}`;
+
+        // Smart Save: Sla de foto op in de database voor de volgende keer
+        if (mealId && !mealId.toString().startsWith('meal-')) {
+            fetch(`${API_URL}/save-meal-image`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ meal_id: mealId, image_data: dataUrl })
+            });
+        }
+        return dataUrl;
+    } catch (e) {
+        return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${mealId}`;
+    }
 };
 
 // 2. WEEKPLAN GENEREREN (Database First + AI Fallback)

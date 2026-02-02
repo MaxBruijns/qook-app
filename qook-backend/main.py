@@ -50,10 +50,8 @@ class SaveImageRequest(BaseModel):
 
 # --- HELPER: SERVER-SIDE AFBEELDING ---
 def get_backend_image_url(title: str, ai_prompt: str):
-    """Maakt een unieke AI foto link zonder browser API keys te gebruiken."""
-    seed = random.randint(1, 999999)
-    clean_title = re.sub(r'[^a-zA-Z0-9 ]', '', title)
-    return f"https://image.pollinations.ai/prompt/{clean_title.replace(' ', '%20')}?width=800&height=600&nologo=true&seed={seed}"
+   
+    return None
 
 def clean_json(text):
     return re.sub(r'```json\s*|\s*```', '', text).strip()

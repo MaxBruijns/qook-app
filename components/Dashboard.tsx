@@ -13,31 +13,21 @@ export const MealCard: React.FC<any> = ({ meal, dayIndex, onClick, selectedMealI
     const [isGenerating, setIsGenerating] = useState(false);
 
     useEffect(() => {
-        const loadImage = async () => {
-            // Als we al een echte URL hebben (die geen Pollinations troep is), stop dan.
-            if (imgUrl && !imgUrl.includes('pollinations')) return;
+    const loadImage = async () => {
+        // Logica: als de URL niet begint met 'data:image', 
+        // dan beschouwen we hem als 'niet aanwezig' of 'foutief'.
+        if (imgUrl && imgUrl.startsWith('data:image')) return;
 
-            setIsGenerating(true);
-            try {
-                // We importeren de functie uit api.ts
-                const { generateMealImage } = await import('../services/api');
-                const newUrl = await generateMealImage(
-                    meal.id, 
-                    meal.title, 
-                    meal.ai_image_prompt || meal.title,
-                    meal.image_url
-                );
-                setImgUrl(newUrl);
-            } catch (err) {
-                console.error("Fout bij laden afbeelding:", err);
-                // Unieke Unsplash backup per gerecht als Gemini faalt
-                setImgUrl(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${meal.id}`);
-            } finally {
-                setIsGenerating(false);
-            }
-        };
-        loadImage();
-    }, [meal.id, meal.image_url]);
+        const url = await generateMealImage(
+            meal.id, 
+            meal.title, 
+            meal.ai_image_prompt || meal.title,
+            meal.image_url
+        );
+        setImgUrl(url);
+    };
+    loadImage();
+}, [meal.id]);
 
     // ... rest van de MealCard logica (displayTime, kcal, etc.)
 
