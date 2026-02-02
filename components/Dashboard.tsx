@@ -6,34 +6,21 @@ import { useTranslation } from '../utils/i18n';
 import { generateMealImage } from '../services/api'; // Importeer de centrale image functie
 
 // Sub-component voor een individueel gerecht
-export const MealCard: React.FC<{ 
-    meal: Meal, 
-    dayIndex?: number,
-    onClick: (m: Meal) => void, 
-    selectedMealIds: Set<string>, 
-    onToggleShopItem: (id: string, s: boolean) => void, 
-    onReplace?: (m: Meal, idx: number) => void,
-    t: any,
-    isLocked?: boolean,
-    language: string,
-    isReplacing?: boolean,
-    showDayLabel?: boolean,
-    userStatus?: SubscriptionStatus,
-    replacementsUsed?: number
-}> = ({ meal, dayIndex, onClick, selectedMealIds, onToggleShopItem, onReplace, t, isLocked, language, isReplacing, showDayLabel = true, userStatus, replacementsUsed = 0 }) => {
+export const MealCard: React.FC<any> = ({ meal, dayIndex, onClick, selectedMealIds, onToggleShopItem, onReplace, t, isLocked, language, isReplacing, showDayLabel = true, userStatus, replacementsUsed = 0 }) => {
     
-    // 1. AFBEELDING LOGICA
+    // 1. AFBEELDING LOGICA (Geen Pollinations meer!)
     const [imgUrl, setImgUrl] = useState<string | null>(meal.image_url || meal.generated_image_url || meal.image || null);
     const [isGenerating, setIsGenerating] = useState(false);
 
     useEffect(() => {
         const loadImage = async () => {
-            // Als er al een URL is en het is geen oude Pollinations link, stop dan.
+            // Als we al een echte URL hebben (die geen Pollinations troep is), stop dan.
             if (imgUrl && !imgUrl.includes('pollinations')) return;
 
-            // Roep Gemini aan via de API service
             setIsGenerating(true);
             try {
+                // We importeren de functie uit api.ts
+                const { generateMealImage } = await import('../services/api');
                 const newUrl = await generateMealImage(
                     meal.id, 
                     meal.title, 
@@ -43,14 +30,16 @@ export const MealCard: React.FC<{
                 setImgUrl(newUrl);
             } catch (err) {
                 console.error("Fout bij laden afbeelding:", err);
-                // Fallback naar een kwalitatieve Unsplash foto als Gemini faalt
-                setImgUrl(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop`);
+                // Unieke Unsplash backup per gerecht als Gemini faalt
+                setImgUrl(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${meal.id}`);
             } finally {
                 setIsGenerating(false);
             }
         };
         loadImage();
     }, [meal.id, meal.image_url]);
+
+    // ... rest van de MealCard logica (displayTime, kcal, etc.)
 
     // 2. DATA FALLBACKS
     const displayTime = meal.estimated_time_minutes || (meal as any).time || 30;

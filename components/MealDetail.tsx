@@ -21,12 +21,12 @@ export const MealDetail: React.FC<any> = ({
     const isCulinaryMode = meal.mode === 'culinary';
 
     // EFFECT 1: Afbeelding laden/genereren via de centrale API service
-    useEffect(() => {
-        const loadImage = async () => {
-            // Als we al een geldige URL hebben (geen oude Pollinations link), stop dan
-            if (imgUrl && !imgUrl.includes('pollinations') && imgUrl !== '') return;
+useEffect(() => {
+    const loadImage = async () => {
+        // Alleen laden als we nog geen goede URL hebben
+        if (imgUrl && !imgUrl.includes('pollinations') && imgUrl !== '') return;
 
-            // Roep de centrale functie aan (Gemini + DB save)
+        try {
             const url = await generateMealImage(
                 meal.id, 
                 meal.title, 
@@ -34,9 +34,12 @@ export const MealDetail: React.FC<any> = ({
                 meal.image_url
             );
             setImgUrl(url);
-        };
-        loadImage();
-    }, [meal.id]);
+        } catch (e) {
+            setImgUrl(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${meal.id}`);
+        }
+    };
+    loadImage();
+}, [meal.id]);
 
     // EFFECT 2: Details (ingrediënten/stappen) laden
     useEffect(() => {

@@ -1,102 +1,66 @@
 import { supabase } from '../utils/supabase'; 
-import { GoogleGenAI } from "@google/genai";
 
 const API_URL = 'https://qook-backend.onrender.com';
-const MODEL_IMAGE = 'gemini-2.0-flash'; 
 
-let generationQueue = Promise.resolve();
-
-// 1. AFBEELDING GENEREREN (GEMINI) + SMART SAVE
-export const generateMealImage = async (mealId: string, title: string, aiPrompt: string, existingUrl?: string): Promise<string> => {
-    if (existingUrl && existingUrl.startsWith('data:image')) return existingUrl;
-
-    const cacheKey = `qook_img_${mealId}`;
-    const cached = localStorage.getItem(cacheKey);
-    if (cached) return cached;
-
-    return new Promise((resolve) => {
-        generationQueue = generationQueue.then(async () => {
-            try {
-                const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-                if (!apiKey) throw new Error("Key missing");
-
-                const genAI = new GoogleGenAI(apiKey);
-                const model = genAI.getGenerativeModel({ model: MODEL_IMAGE });
-                
-                const prompt = `A professional food photography shot of ${title}. ${aiPrompt}. 4k, cinematic lighting, high quality plated dish.`;
-                
-                const result = await model.generateContent(prompt);
-                const response = await result.response;
-                
-                const parts = (response as any).candidates?.[0]?.content?.parts || [];
-                let dataUrl = '';
-                for (const part of parts) {
-                    if (part.inlineData?.data) {
-                        dataUrl = `data:image/png;base64,${part.inlineData.data}`;
-                        break;
-                    }
-                }
-
-                if (dataUrl) {
-                    if (mealId && !mealId.toString().startsWith('meal-')) {
-                        fetch(`${API_URL}/save-meal-image`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ meal_id: mealId, image_data: dataUrl })
-                        }).catch(e => console.warn("Opslaan image mislukt", e));
-                    }
-                    localStorage.setItem(cacheKey, dataUrl);
-                    resolve(dataUrl);
-                } else {
-                    throw new Error("No data");
-                }
-            } catch (error) {
-                console.error("Image Gen Error:", error);
-                resolve(`https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop`);
-            }
-        });
-    });
+// 1. AFBEELDINGEN (Backend levert nu de URL, dit is alleen een fallback)
+export const generateMealImage = async (mealId: string, title: string, prompt: string, existingUrl?: string): Promise<string> => {
+    // Gebruik de URL die de backend heeft klaargezet
+    if (existingUrl && !existingUrl.includes('pollinations')) return existingUrl;
+    
+    // Als er echt niets is, een nette Unsplash fallback op basis van de titel
+    return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${mealId}`;
 };
 
-// 2. WEEKPLAN GENEREREN (DATABASE FIRST)
+// 2. WEEKPLAN GENEREREN (Database First + AI Fallback)
 export const generateWeeklyPlan = async (prefs: any, favoriteTitles: string[] = []) => {
     const res = await fetch(`${API_URL}/generate-weekly-plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            ...prefs, 
-            user_id: prefs.user_id || 'demo-user', 
-            favorite_titles: favoriteTitles 
+        body: JSON.stringify({
+            ...prefs,
+            user_id: prefs.user_id || 'demo-user',
+            favorite_titles: favoriteTitles,
+            generationHistory: prefs.generationHistory || []
         })
     });
     
     if (!res.ok) throw new Error("Backend Error");
     const data = await res.json();
 
-    return {
-        days: data.days.map((r: any, i: number) => ({
-            ...r,
-            id: r.id || `meal-${i}-${Math.random().toString(36).slice(2, 5)}`,
-            time: r.estimated_time_minutes || 30,
-            calories: r.calories_per_portion || 500
-        })),
-        zero_waste_report: data.zero_waste_report,
-        generatedAt: new Date().toISOString()
-    };
+    // Mapping logica voor demo/reused plannen om veldnamen gelijk te trekken
+    if (data.plan_id === "demo-id" || data.plan_id === "reused") {
+        return {
+            days: data.days.map((r: any, i: number) => ({
+                ...r,
+                id: r.id || `meal-${i}-${Math.random().toString(36).slice(2, 5)}`,
+                time: r.estimated_time_minutes || 30,
+                calories: r.calories_per_portion || 500,
+                estimated_time_minutes: r.estimated_time_minutes || 30,
+                calories_per_portion: r.calories_per_portion || 500
+            })),
+            zero_waste_report: data.zero_waste_report || 'Menu van de Chef.',
+            generatedAt: new Date().toISOString()
+        };
+    }
+
+    // Voor ingelogde gebruikers die een nieuw plan opslaan
+    return await fetchPlanFromDB(data.plan_id);
 };
 
 // 3. VOLLEDIG RECEPT OPHALEN
 export const generateFullRecipe = async (meal: any, prefs: any) => {
+    // Als de database-bank het recept al compleet heeft (stappen aanwezig), gebruik die!
     if (meal.steps && meal.steps.length > 0) return meal;
+
     const res = await fetch(`${API_URL}/get-recipe-details`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            meal_id: meal.id, meal_title: meal.title, mode: meal.mode || 'premium',
-            adultsCount: prefs.adultsCount, childrenCount: prefs.childrenCount, language: prefs.language
-        })
+        body: JSON.stringify({ meal_id: meal.id })
     });
+
     const data = await res.json();
+    if (data.status === "error") throw new Error(data.message);
+    
     return { ...meal, ...data.details };
 };
 
@@ -109,14 +73,14 @@ export const replaceMeal = async (currentMeal: any, prefs: any, dayIndex: number
             old_meal_title: currentMeal.title,
             day_index: dayIndex,
             mode: prefs.dayModes[dayIndex] || 'premium',
-            prefs: { ...prefs, user_id: prefs.user_id || 'demo' }
+            prefs: { ...prefs, user_id: prefs.user_id || 'demo-user' }
         })
     });
     const data = await res.json();
     return { ...data.meal, id: currentMeal.id };
 };
 
-// 5. KOELKAST SCAN (DEZE ONTBRAAK!)
+// 5. KOELKAST SCAN (Analyze Fridge)
 export const analyzeFridgeImage = async (base64: string, prefs: any) => {
     const res = await fetch(`${API_URL}/analyze-fridge`, {
         method: 'POST',
@@ -143,5 +107,34 @@ export const generateShoppingList = async (meals: any[], prefs: any) => {
     const data = await res.json();
     return data.items.map((it: any, i: number) => ({ ...it, id: `item-${i}`, checked: false }));
 };
+
+// 7. HULPFUNCTIE: PLAN LADEN UIT DB
+async function fetchPlanFromDB(planId: string) {
+    const { data: recipes, error: rError } = await supabase
+        .from('recipes')
+        .select('*')
+        .eq('weekly_plan_id', planId)
+        .order('day_of_week', { ascending: true });
+
+    if (!recipes || rError) return null;
+
+    const { data: plan } = await supabase
+        .from('weekly_plans')
+        .select('zero_waste_report')
+        .eq('id', planId)
+        .single();
+
+    return {
+        days: recipes.map((r) => ({
+            ...r,
+            time: r.estimated_time_minutes || 30,
+            calories: r.calories_per_portion || 500,
+            estimated_time_minutes: r.estimated_time_minutes || 30,
+            calories_per_portion: r.calories_per_portion || 500
+        })),
+        zero_waste_report: plan?.zero_waste_report || 'Menu uit de bank.',
+        generatedAt: new Date().toISOString()
+    };
+}
 
 export const generateDayPlan = async () => null;
