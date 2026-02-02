@@ -3,29 +3,27 @@ import { GoogleGenAI } from "@google/genai";
 
 const API_URL = 'https://qook-backend.onrender.com';
 
-// 1. BEELDGENERATIE VIA GEMINI + SMART SAVE
+// 1. BEELDGENERATIE (ALLES BINNEN DE FUNCTIE)
 export const generateMealImage = async (mealId: string, title: string, aiPrompt: string, existingUrl?: string): Promise<string> => {
-    // 1. Bestaande afbeelding check
-    if (existingUrl && existingUrl.startsWith('http') && !existingUrl.includes('unsplash') && !existingUrl.includes('pollinations')) {
+    // Gebruik bestaande URL als die er is en geen Pollinations/Unsplash is
+    if (existingUrl && existingUrl.startsWith('http') && !existingUrl.includes('pollinations') && !existingUrl.includes('unsplash')) {
         return existingUrl;
     }
 
-    // 2. Haal de sleutel op binnen de functie
+    // HAAL DE KEY HIER OP (Niet bovenin het bestand!)
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
-    // DEBUG LOG: Hiermee zie je in je browser console of de sleutel er echt is (zonder de hele sleutel te tonen)
-    console.log("AI Sleutel check:", apiKey ? "Sleutel gevonden (Begint met " + apiKey.substring(0, 4) + ")" : "SLEUTEL ONTBREEKT NOG STEEDS");
-
     if (!apiKey) {
-        // Fallback naar Unsplash als de sleutel er echt niet is, om een crash te voorkomen
+        console.error("Fout: VITE_GEMINI_API_KEY niet gevonden in omgeving.");
         return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${mealId}`;
     }
 
     try {
+        // Initialiseer de AI pas HIER
         const genAI = new GoogleGenAI(apiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-            
-        const prompt = `A professional gourmet food photography shot of ${title}. ${aiPrompt}. 4k, cinematic lighting, high quality plated dish, culinary masterpiece.`;
+        
+        const prompt = `A professional gourmet food photography shot of ${title}. ${aiPrompt}. 4k, cinematic lighting, high quality plated dish.`;
         
         const result = await model.generateContent(prompt);
         const response = await result.response;
@@ -41,23 +39,22 @@ export const generateMealImage = async (mealId: string, title: string, aiPrompt:
         }
 
         if (dataUrl) {
-            // Stap 2: SMART SAVE - Sla de foto op in de database voor de volgende keer
+            // Sla op in de bank
             if (mealId && !mealId.toString().startsWith('meal-') && mealId !== 'reused-from-bank') {
                 fetch(`${API_URL}/save-meal-image`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ meal_id: mealId, image_data: dataUrl })
-                }).catch(err => console.error("Kon image niet vastleggen in bank:", err));
+                }).catch(e => console.warn("Opslaan mislukt", e));
             }
             return dataUrl;
         }
-
-        throw new Error("Geen beelddata ontvangen");
+        throw new Error("Geen beelddata");
 
     } catch (error) {
         console.error("Gemini Image Error:", error);
-        // Fallback naar een kwalitatieve Unsplash foto als Gemini faalt
-        return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop`;
+        // Unieke fallback per gerecht via Unsplash
+        return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${encodeURIComponent(title)}`;
     }
 };
 
@@ -77,53 +74,39 @@ export const generateWeeklyPlan = async (prefs: any, favoriteTitles: string[] = 
     if (!res.ok) throw new Error("Backend Error");
     const data = await res.json();
 
-    // Als de data direct van de AI komt (demo) of direct uit de bank (reused)
     if (data.plan_id === "demo-temporary-id" || data.plan_id === "reused-from-bank") {
         return {
             days: data.days.map((r: any, i: number) => ({
                 ...r,
                 id: r.id || `meal-${i}-${Math.random().toString(36).slice(2, 5)}`,
-                // Wis oude pollinations links zodat de MealCard een nieuwe Gemini foto aanvraagt
                 image_url: (r.image_url && r.image_url.includes('pollinations')) ? null : r.image_url,
                 time: r.estimated_time_minutes || 30,
-                calories: r.calories_per_portion || 500,
-                estimated_time_minutes: r.estimated_time_minutes || 30,
-                calories_per_portion: r.calories_per_portion || 500
+                calories: r.calories_per_portion || 500
             })),
-            zero_waste_report: data.zero_waste_report || 'Geselecteerd uit de Qook receptenbank.',
+            zero_waste_report: data.zero_waste_report || 'Menu uit de bank.',
             generatedAt: new Date().toISOString()
         };
     }
-
-    // Voor ingelogde gebruikers die een nieuw plan opslaan
     return await fetchPlanFromDB(data.plan_id);
 };
 
-// 3. VOLLEDIG RECEPT OPHALEN
+// 3. RECEPT DETAILS
 export const generateFullRecipe = async (meal: any, prefs: any) => {
-    // Gebruik data uit de bank als die al compleet is
-    if (meal.steps && meal.steps.length > 0 && meal.ingredients && meal.ingredients.length > 0) {
-        return meal;
-    }
+    if (meal.steps && meal.steps.length > 0 && meal.ingredients) return meal;
 
     const res = await fetch(`${API_URL}/get-recipe-details`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            meal_id: meal.id,
-            meal_title: meal.title,
-            mode: meal.mode || 'premium',
-            adultsCount: prefs.adultsCount,
-            childrenCount: prefs.childrenCount,
-            language: prefs.language
+            meal_id: meal.id, meal_title: meal.title, mode: meal.mode || 'premium',
+            adultsCount: prefs.adultsCount, childrenCount: prefs.childrenCount, language: prefs.language
         })
     });
-
     const data = await res.json();
     return { ...meal, ...data.details };
 };
 
-// 4. OVERIGE FUNCTIES
+// 4. OVERIGE (REPLACE, FRIDGE, SHOPPING)
 export const replaceMeal = async (currentMeal: any, prefs: any, dayIndex: number) => {
     const res = await fetch(`${API_URL}/replace-meal`, {
         method: 'POST',
@@ -152,42 +135,25 @@ export const generateShoppingList = async (meals: any[], prefs: any) => {
     const res = await fetch(`${API_URL}/generate-shopping-list`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            meal_titles: meals.map(m => m.title),
-            language: prefs.language
-        })
+        body: JSON.stringify({ meal_titles: meals.map(m => m.title), language: prefs.language })
     });
     const data = await res.json();
     return data.items.map((it: any, i: number) => ({ ...it, id: `item-${i}`, checked: false }));
 };
 
-// 5. DATABASE FETCH HULPFUNCTIE (Synchroniseert ook hier de velden)
+// 5. DATABASE FETCH
 async function fetchPlanFromDB(planId: string) {
-    const { data: recipes, error: rError } = await supabase
-        .from('recipes')
-        .select('*')
-        .eq('weekly_plan_id', planId)
-        .order('day_of_week', { ascending: true });
-
-    if (!recipes || rError) return null;
-
-    const { data: plan } = await supabase
-        .from('weekly_plans')
-        .select('zero_waste_report')
-        .eq('id', planId)
-        .single();
-
+    const { data: recipes } = await supabase.from('recipes').select('*').eq('weekly_plan_id', planId).order('day_of_week', { ascending: true });
+    const { data: plan } = await supabase.from('weekly_plans').select('zero_waste_report').eq('id', planId).single();
+    if (!recipes) return null;
     return {
         days: recipes.map((r) => ({
             ...r,
-            // Opschonen van eventuele oude Pollinations links
             image_url: (r.image_url && r.image_url.includes('pollinations')) ? null : r.image_url,
             time: r.estimated_time_minutes || 30,
-            calories: r.calories_per_portion || 500,
-            estimated_time_minutes: r.estimated_time_minutes || 30,
-            calories_per_portion: r.calories_per_portion || 500
+            calories: r.calories_per_portion || 500
         })),
-        zero_waste_report: plan?.zero_waste_report || 'Plan geladen uit receptenbank.',
+        zero_waste_report: plan?.zero_waste_report || 'Menu uit de bank.',
         generatedAt: new Date().toISOString()
     };
 }
