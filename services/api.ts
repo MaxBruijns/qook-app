@@ -5,28 +5,27 @@ const API_URL = 'https://qook-backend.onrender.com';
 
 // 1. BEELDGENERATIE (ALLES BINNEN DE FUNCTIE)
 export const generateMealImage = async (mealId: string, title: string, aiPrompt: string, existingUrl?: string): Promise<string> => {
-    // Gebruik bestaande URL als die er is en geen Pollinations/Unsplash is
     if (existingUrl && existingUrl.startsWith('http') && !existingUrl.includes('pollinations') && !existingUrl.includes('unsplash')) {
         return existingUrl;
     }
 
-    // HAAL DE KEY HIER OP (Niet bovenin het bestand!)
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
     if (!apiKey) {
-        console.error("Fout: VITE_GEMINI_API_KEY niet gevonden in omgeving.");
         return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${mealId}`;
     }
 
     try {
-        // Initialiseer de AI pas HIER
-        const genAI = new GoogleGenAI(apiKey);
+        // GEWIJZIGD: Nu met accolades om de apiKey heen
+        const genAI = new GoogleGenAI({ apiKey: apiKey }); 
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         
         const prompt = `A professional gourmet food photography shot of ${title}. ${aiPrompt}. 4k, cinematic lighting, high quality plated dish.`;
         
         const result = await model.generateContent(prompt);
         const response = await result.response;
+        
+        // ... rest van je code ...
         
         const parts = (response as any).candidates?.[0]?.content?.parts || [];
         let dataUrl = '';
