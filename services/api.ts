@@ -5,22 +5,26 @@ const API_URL = 'https://qook-backend.onrender.com';
 
 // 1. BEELDGENERATIE VIA GEMINI + SMART SAVE
 export const generateMealImage = async (mealId: string, title: string, aiPrompt: string, existingUrl?: string): Promise<string> => {
+    // 1. Bestaande afbeelding check
     if (existingUrl && existingUrl.startsWith('http') && !existingUrl.includes('unsplash') && !existingUrl.includes('pollinations')) {
         return existingUrl;
     }
 
-    // HAAL DE KEY HIER OP, NIET BOVENIN HET BESTAND
+    // 2. Haal de sleutel op binnen de functie
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    
+
+    // DEBUG LOG: Hiermee zie je in je browser console of de sleutel er echt is (zonder de hele sleutel te tonen)
+    console.log("AI Sleutel check:", apiKey ? "Sleutel gevonden (Begint met " + apiKey.substring(0, 4) + ")" : "SLEUTEL ONTBREEKT NOG STEEDS");
+
     if (!apiKey) {
-        console.error("DEBUG: VITE_GEMINI_API_KEY is leeg in de browser!");
+        // Fallback naar Unsplash als de sleutel er echt niet is, om een crash te voorkomen
         return `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${mealId}`;
     }
 
     try {
-        const genAI = new GoogleGenAI(apiKey); // Initialiseer hier pas
+        const genAI = new GoogleGenAI(apiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-        
+            
         const prompt = `A professional gourmet food photography shot of ${title}. ${aiPrompt}. 4k, cinematic lighting, high quality plated dish, culinary masterpiece.`;
         
         const result = await model.generateContent(prompt);
