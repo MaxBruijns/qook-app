@@ -1,17 +1,34 @@
 <!DOCTYPE html>
 <html lang="nl">
-  <head>
+<head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Qook – Jouw Persoonlijke Sous-chef</title>
+    <title>Qook - Jouw Persoonlijke Sous-chef</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        kooq: {
+                            sage: '#94B79D', sand: '#D9C9A3', white: '#F5F7F4',
+                            slate: '#5D6E76', clementine: '#F3A567', dark: '#2A3338'
+                        }
+                    },
+                    fontFamily: { sans: ['DM Sans', 'sans-serif'], body: ['Inter', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
     <style>
-      body { background-color: #F5F7F4; color: #5D6E76; }
+        body { background-color: #F5F7F4; color: #5D6E76; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
-  </head>
-  <body>
+</head>
+<body>
     <div id="root"></div>
-    <script type="module" src="index.tsx"></script>
-  </body>
+    <script type="module" src="/src/index.tsx"></script>
+</body>
 </html>
