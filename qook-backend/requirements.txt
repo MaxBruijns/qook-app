@@ -1,7 +1,7 @@
 fastapi
 uvicorn
-pydantic
-google-generativeai
+openai>=1.0.0
+httpx
 supabase
-gunicorn
-Python-dotenv
+python-dotenv
+pydantic
