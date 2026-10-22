@@ -10,7 +10,7 @@
  *
  * Instellingen (Cloudflare → Worker → Settings → Variables and Secrets):
  *  - GEMINI_API_KEY (secret, verplicht)
- *  - TEXT_MODEL     (optioneel, standaard gemini-2.5-flash)
+ *  - TEXT_MODEL     (optioneel, standaard gemini-3.5-flash-lite)
  */
 
 interface Env {
@@ -55,7 +55,7 @@ const list = (a: any) => (Array.isArray(a) ? a : []);
 // ---------------------------------------------------------------------------
 async function aiJson(env: Env, system: string, prompt: string, temperature = 0.8, imageB64?: string): Promise<any> {
   if (!env.GEMINI_API_KEY) throw new ApiError(500, 'GEMINI_API_KEY ontbreekt in de Worker-instellingen');
-  const model = env.TEXT_MODEL || 'gemini-2.5-flash';
+  const model = env.TEXT_MODEL || 'gemini-3.5-flash-lite';
   const parts: any[] = [];
   if (imageB64) parts.push({ inline_data: { mime_type: 'image/jpeg', data: imageB64 } });
   parts.push({ text: prompt });
@@ -464,7 +464,7 @@ export default {
         await ensureSchema(env);
         return json({
           status: 'ok',
-          text_model: env.TEXT_MODEL || 'gemini-2.5-flash',
+          text_model: env.TEXT_MODEL || 'gemini-3.5-flash-lite',
           gemini_key: env.GEMINI_API_KEY ? 'ingesteld' : 'ONTBREEKT',
           database: 'ok',
         });

@@ -271,6 +271,9 @@ export default function App() {
         }
     } catch (err) { 
         console.error("Plan generation failed:", err);
+        if (!isAuto) {
+            alert(`Het weekmenu kon niet worden gemaakt. ${(err as Error)?.message || ''}\nProbeer het over een moment opnieuw.`);
+        }
     } finally { 
         setLoading(false); 
     }
