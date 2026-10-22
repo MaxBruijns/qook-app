@@ -163,6 +163,9 @@ export const MealDetail: React.FC<Props> = ({
                                                         </li>
                                                     ))}
                                                 </ul>
+                                                {(userPrefs.diet || []).some(d => ['Glutenarm', 'Lactosevrij', 'Notenvrij'].includes(d)) && (
+                                                    <p className={`mt-4 text-xs leading-relaxed ${isCulinaryMode ? 'text-white/60' : 'text-kooq-slate'}`}>{t.allergy_notice}</p>
+                                                )}
                                             </div>
 
                                             {fullMeal.supplies && fullMeal.supplies.length > 0 && (

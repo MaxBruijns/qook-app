@@ -5,7 +5,8 @@ import { MealDetail } from './components/MealDetail';
 import { CookingMode } from './components/CookingMode';
 import { ShoppingList } from './components/ShoppingList';
 import { ChatAssistant } from './components/Chat';
-import { Header, PaywallModal, Button } from './components/Shared';
+import { Header, PaywallModal, Button, Notices } from './components/Shared';
+import { notify } from './utils/notify';
 import { SettingsModal } from './components/Settings';
 import { FavoritesView } from './components/FavoritesView';
 import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult, SubscriptionStatus, DayMode, Usage } from './types';
@@ -279,13 +280,13 @@ export default function App() {
     localStorage.setItem('qook_prefs', JSON.stringify(p));
     if (!regen) return;
     if (canRegenerateNow()) triggerRegeneration(p);
-    else alert(t.prefs_next_week);
+    else notify(t.prefs_next_week);
   };
 
   /** Fout van de server: limiet bereikt -> abonnementen tonen, anders een melding. */
   const handleApiError = (err: any, fallbackText: string) => {
     if (err?.status === 402) { setShowPaywall(true); return; }
-    alert(`${fallbackText} ${err?.message || ''}`.trim());
+    notify(`${fallbackText} ${err?.message || ''}`.trim(), 'error');
   };
 
   const triggerRegeneration = async (prefsOverride?: UserPreferences, isAuto = false, force = false) => {
@@ -294,7 +295,7 @@ export default function App() {
     const countsAsExtra = !isAuto && !force && !!plan;   // eerste menu en upgrade tellen niet mee
 
     if (!isAuto && !force && !canRegenerateNow()) {
-        if (isPremiumLike) alert(t.limit_reached_alert);
+        if (isPremiumLike) notify(t.limit_reached_alert);
         else setShowPaywall(true);
         return;
     }
@@ -364,10 +365,10 @@ export default function App() {
   const handleDeleteAccount = async (password: string) => {
     try {
         await deleteAccount(password);
-        alert(t.account_deleted);
+        alert(t.account_deleted);   // pagina herlaadt direct; daarom hier een gewone melding
         window.location.replace('/');
     } catch (e: any) {
-        alert(e?.message || t.auth_error);
+        notify(e?.message || t.auth_error, 'error');
     }
   };
 
@@ -476,10 +477,7 @@ export default function App() {
   if (view === 'choice') {
     const supportedLangs = [
         { code: 'nl-NL', label: 'Nederlands' },
-        { code: 'en-US', label: 'English' },
-        { code: 'de-DE', label: 'Deutsch' },
-        { code: 'fr-FR', label: 'Français' },
-        { code: 'es-ES', label: 'Español' }
+        { code: 'en-US', label: 'English' }
     ];
 
     return (
@@ -560,7 +558,7 @@ export default function App() {
                 } catch (err: any) {
                     // Limiet bereikt: zonder account eerst registreren, anders de abonnementen.
                     if (err?.status === 402) { if (account) setShowPaywall(true); else setView('register'); }
-                    else alert(`De scan lukte niet. ${err?.message || ''}`);
+                    else notify(`De scan lukte niet. ${err?.message || ''}`, 'error');
                 } finally {
                     setLoading(false);
                 }
@@ -617,7 +615,7 @@ export default function App() {
             onMealSelect={(m: Meal) => { setSelectedMeal(m); setView('meal-detail'); }} 
             selectedMealIds={selectedMealIds} 
             onToggleShopItem={toggleShopItem} 
-            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); }).catch(e => alert(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`)).finally(() => setLoading(false)); }} 
+            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
             onReplaceMeal={async (oldMeal: Meal, dayIndex: number) => { 
                 if (userStatus === 'free' || userStatus === 'basic') {
                     if (usage.replacements >= 3) { 

@@ -678,11 +678,19 @@ function orderByFreshness(days: any[], plans: DayPlan[]) {
   return out;
 }
 
+/** Bij allergie/intolerantie: een strikte regel (ook verborgen bronnen zoals sauzen en bouillon). */
+function allergyRule(prefs: any) {
+  const map: Record<string, string> = { Glutenarm: 'gluten (ook geen sojasaus, paneermeel, bouillonblokjes met tarwe)',
+    Lactosevrij: 'melk en zuivel (ook geen boter, room, kaas)', Notenvrij: 'noten en pinda (ook geen pesto, satésaus)' };
+  const items = list(prefs.diet).map((d: string) => map[d]).filter(Boolean);
+  return items.length ? `\n- ALLERGIE (STRIKT, ook in sauzen en bouillon): geen ${items.join('; geen ')}.` : '';
+}
+
 /** Voorkeuren uit de onboarding en instellingen. */
 function conditionsBlock(prefs: any) {
   const kitchens = list(prefs.kitchenProfiles);
   return `VOORWAARDEN:
-- Dieet: ${joinOr(prefs.diet, 'Geen')}${prefs.customDiet ? ` (${String(prefs.customDiet).slice(0, 200)})` : ''}
+- Dieet: ${joinOr(prefs.diet, 'Geen')}${prefs.customDiet ? ` (${String(prefs.customDiet).slice(0, 200)})` : ''}${allergyRule(prefs)}
 - Huishouden: ${prefs.adultsCount ?? 2} volwassenen, ${prefs.childrenCount ?? 0} kinderen.
 - Budget: ${BUDGET_RULES[prefs.budget] || BUDGET_RULES.Normaal}
 - Weekprofiel: ${WEEK_PROFILE_RULES[prefs.weekProfile] || WEEK_PROFILE_RULES.surprise}${kitchens.length ? `
@@ -860,6 +868,9 @@ async function bankCandidates(env: Env, prefs: any, modes: string[], limit: numb
   const args: any[] = [...modes];
   for (const t of diet.tags) { where.push('diet_tags LIKE ?'); args.push(`%,${t},%`); }
   if (prefs.weekProfile === 'kid_friendly') where.push(`(kid = 1 OR mode = 'culinary')`);
+  // Allergie of intolerantie: alleen gerechten waarvan we het volledige recept kennen (en dus kunnen controleren).
+  const allergyTags = diet.tags.filter(t => ALLERGENS[t]);
+  if (allergyTags.length) where.push(`details_v >= ${MIN_RECIPE_VERSION}`);
   const { results } = await env.DB.prepare(
     `SELECT id, title, mode, main, cuisine, kid, minutes, has_image, details_v,
        CASE WHEN details_v >= ${MIN_RECIPE_VERSION} THEN (SELECT group_concat(json_extract(j.value, '$.name'), '|')
@@ -867,11 +878,37 @@ async function bankCandidates(env: Env, prefs: any, modes: string[], limit: numb
      FROM recipes
      WHERE ${where.join(' AND ')} ORDER BY RANDOM() LIMIT ${Number(limit) || 100}`
   ).bind(...args).all();
-  return (results || []).map((r: any) => ({
+  const safe = (r: any) => !allergyTags.length || !hasAllergen(String(r.ingr || ''), allergyTags);
+  return (results || []).filter(safe).map((r: any) => ({
     id: r.id, title: r.title, mode: r.mode, main_ingredient: r.main || '', cuisine: r.cuisine || '',
     kid: !!r.kid, minutes: Number(r.minutes) || 30, ingredients: shortIngredients(r.ingr),
     score: (r.has_image ? 0.5 : 0) + (Number(r.details_v) >= MIN_RECIPE_VERSION ? 0.5 : 0),
   }));
+}
+
+/**
+ * Extra controle bij allergie/intolerantie: de dieetlabels komen van de AI; daarom ook de ingrediënten
+ * van het recept nalopen. Liever een gerecht te veel weglaten dan een fout.
+ */
+const ALLERGENS: Record<string, { bad: RegExp; ok?: RegExp }> = {
+  glutenvrij: {
+    bad: /tarwe|\bbloem\b|\bmeel\b|tarwemeel|speltmeel|roggemeel|volkorenmeel|pasta|spaghetti|penne|lasagne|tagliatelle|macaroni|noedel|noodle|\bmie\b|brood|wrap|tortilla|pita|naan|couscous|bulgur|gerst|rogge|spelt|paneermeel|panko|bladerdeeg|deeg|sojasaus|ketjap|seitan|\bbier|orzo|gnocchi|crouton|beschuit|cracker|bouillonblok/,
+    ok: /glutenvrij|gluten free|rijstnoedel|rijstpapier|maizena|maisbloem|rijstebloem|rijstmeel|boekweit|tamari/,
+  },
+  lactosevrij: {
+    bad: /melk|room|boter|kaas|yoghurt|kwark|creme fraiche|mascarpone|ricotta|mozzarella|parmezaan|parmigiano|pecorino|feta|halloumi|burrata|ghee|zuivel|\bwei\b/,
+    ok: /lactosevrij|plantaardig|kokos|amandelmelk|havermelk|sojamelk|rijstmelk|haverroom|sojaroom|pindakaas|pindaboter|vegan/,
+  },
+  notenvrij: {
+    bad: /noot|noten|amandel|cashew|pinda|hazelno|walno|pecan|pistache|macadamia|pijnboompit|pesto|marsepein|praline|nougat|sate ?saus|satesaus/,
+    ok: /nootmuskaat|notenvrij/,
+  },
+};
+function hasAllergen(ingredientNames: string, tags: string[]) {
+  return ingredientNames.split('|').some(raw => {
+    const n = normTitle(raw);
+    return tags.some(t => ALLERGENS[t] && ALLERGENS[t].bad.test(n) && !(ALLERGENS[t].ok?.test(n)));
+  });
 }
 
 /** Volgorde van voorkeur: keukenvoorkeur, kindvriendelijk, favoriet, niet te vaak dezelfde keuken + toeval. */
