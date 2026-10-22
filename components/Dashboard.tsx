@@ -362,7 +362,7 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
           
           <div className="grid grid-cols-1 md:grid-cols-6 gap-10">
               {plan.days.map((meal: Meal, idx: number) => (
-                  <div key={meal.id} className={idx < 3 ? "col-span-1 md:col-span-2" : "col-span-1 md:col-span-3"}>
+                  <div key={`${meal.id}-${idx}`} className={idx < 3 ? "col-span-1 md:col-span-2" : "col-span-1 md:col-span-3"}>
                       <MealCard 
                         meal={meal} 
                         dayIndex={idx} 
