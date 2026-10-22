@@ -218,7 +218,7 @@ const MEAL_SHAPE = `{
 }`;
 
 /** Verhoog dit als de receptregels veranderen: oudere bewaarde recepten worden dan opnieuw gemaakt. */
-const RECIPE_VERSION = 2;
+const RECIPE_VERSION = 3;
 
 const FULL_RECIPE_SHAPE = `{
   "ingredients": [{"name": "...", "amount": 0, "unit": "gram | ml | stuks | eetlepel | theelepel | teen | bosje | snufje | naar smaak"}],
@@ -239,7 +239,11 @@ const RECIPE_RULES = `KWALITEITSREGELS (controleer je recept hierop voordat je a
 6. Gebruik praktische keukenmaten: hele stuks waar logisch (1 citroen, 2 tenen knoflook), kruiden in bosjes of
    eetlepels, kleine hoeveelheden in theelepels. Zout en peper als unit "naar smaak" met amount 0.
 7. Correcte spelling en grammatica in het Nederlands (enkelvoud bij 1: "1 eetlepel").
-8. Benodigdheden bevat alleen keukengerei dat in de stappen echt gebruikt wordt.`;
+8. Benodigdheden bevat alleen keukengerei dat in de stappen echt gebruikt wordt.
+9. Noem in de stappen GEEN hoeveelheden (geen grammen, milliliters of aantallen), want de app rekent de
+   ingrediëntenlijst om naar het huishouden en de stappen niet. Verwijs naar het ingrediënt ("de boter",
+   "de bouillon") en bij verdelen naar een deel ("de helft van de boter", "de rest van de tijm").
+   Temperaturen en tijden mogen wel.`;
 
 const TIMER_RULES = `STRIKTE TIMER REGELS:
 1. NOOIT een timer voor de oven (ovens hebben eigen timers).
@@ -253,6 +257,17 @@ const MODE_RULES = `MODUS RICHTLIJNEN:
 - 'culinary': LUXE Gastronomie. Focus op presentatie, verfijnde smaken en techniek.`;
 
 const joinOr = (a: any, fallback: string) => (list(a).length ? list(a).join(', ') : fallback);
+
+const COUNTRIES: Record<string, string> = { NL: 'Nederland', BE: 'België', DE: 'Duitsland', FR: 'Frankrijk',
+  ES: 'Spanje', UK: 'het Verenigd Koninkrijk', US: 'de Verenigde Staten' };
+const countryName = (region?: string) => COUNTRIES[String(region || 'NL').toUpperCase()] || 'Nederland';
+
+/** Beschikbaarheid: gewone supermarkt, behalve bij culinair (dan met alternatief). */
+const availabilityRules = (region?: string) => `BESCHIKBAARHEID VAN INGREDIËNTEN (${countryName(region)}):
+- 'premium' en 'magic': gebruik ALLEEN ingrediënten die in een gewone supermarkt in ${countryName(region)} te koop zijn.
+- 'culinary': speciale ingrediënten (poelier, slager, visboer, kaasspeciaalzaak, toko) mogen, maar zet in de
+  ingrediëntnaam waar je het koopt en een supermarktalternatief, bijvoorbeeld:
+  "kip supreme (bij de poelier; of kipfilet)" of "verse morieljes (bij de groenteboer; of kastanjechampignons)".`;
 
 /** Smaakprofiel als extra blok in de AI-opdracht (leeg als er nog niets geleerd is). */
 const tasteBlock = (profile: any) => {
@@ -290,6 +305,7 @@ ZERO-WASTE INSTRUCTIE:
 - Schrijf een kort 'zero_waste_report' waarin je uitlegt hoe je deze week verspilling voorkomt.
 
 ${MODE_RULES}
+${availabilityRules(prefs.region)}
 
 ${tasteBlock(prefs.tasteProfile)}
 
@@ -319,6 +335,7 @@ async function replaceMeal(env: Env, b: any) {
   const system = `Je vervangt een specifiek gerecht in een weekmenu. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
 STRIKTE RICHTLIJNEN VOOR MODE "${targetMode}".
 ${MODE_RULES}
+${availabilityRules(prefs.region)}
 VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}" en mag NIET voorkomen in de geschiedenis: ${joinOr(list(prefs.generationHistory).slice(-100), 'Geen')}.
 SMAAKVOORKEUR: De gebruiker vindt dit lekker: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik dit als inspiratie voor de stijl van het nieuwe gerecht.
 VOORKEUREN: Dieet: ${joinOr(prefs.diet, 'Geen')}. Tijd: Maximaal ${maxTime || '30'} min. Budget: ${prefs.budget || 'Normaal'}.
@@ -344,6 +361,7 @@ async function fullRecipe(env: Env, b: any) {
   const system = `Je bent een ervaren chef en schrijft een volledig, foutloos recept voor thuiskoks.
 Schrijf in het ${langName(b.language)}. Hoeveelheden voor ${BASE_SERVINGS} personen.
 ${RECIPE_RULES}
+${availabilityRules(b.region)}
 ${TIMER_RULES}
 Antwoord uitsluitend met JSON in deze vorm: ${FULL_RECIPE_SHAPE}`;
   const prompt = `Volledig recept voor: ${meal.title}. Modus: ${meal.mode || summary.mode || 'premium'}.
@@ -409,6 +427,7 @@ async function analyzeFridge(env: Env, b: any) {
   const system = `Je bekijkt een foto van een koelkast of ingrediënten. Benoem wat je duidelijk ziet en stel 3 gerechten voor
 die vooral die ingrediënten gebruiken. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
 Dieet: ${joinOr(prefs.diet, 'Geen')}.
+${availabilityRules(prefs.region)}
 Antwoord uitsluitend met JSON: {"recognizedItems": ["..."], "suggestions": [3 gerechten in deze vorm: ${MEAL_SHAPE}]}`;
   const data = await aiJson(env, system, 'Suggest 3 meals.', 0.6, b.image);
   const suggestions = list(data.suggestions).slice(0, 3);
