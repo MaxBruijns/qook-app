@@ -17,6 +17,8 @@ const sections = [{ title: 'Groente & fruit', items: [{ name: 'Bloemkool <b>', a
 assert.equal((await post('account/email-list', { sections }, c)).status, 501, 'zonder e-mailinstelling');
 env.RESEND_API_KEY = 'x'; env.MAIL_FROM = 'Qook <hallo@q.test>';
 assert.equal((await post('account/email-list', { sections })).status, 401, 'alleen met account');
+assert.equal((await post('account/email-list', { sections }, c)).status, 403, 'eerst e-mailadres bevestigen');
+sqlite.prepare('UPDATE users SET email_verified = 1').run();
 const r = await post('account/email-list', { sections }, c);
 assert.equal(r.status, 200); assert.equal(r.data.to, 'max@q.test');
 assert.deepEqual(mails[0].to, ['max@q.test']);

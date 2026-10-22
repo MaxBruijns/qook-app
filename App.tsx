@@ -296,6 +296,13 @@ export default function App() {
   const [showTrialEnding, setShowTrialEnding] = useState(false);
   // Kan de lijst gemaild worden? (account + e-mail ingesteld op de server)
   const [canMail, setCanMail] = useState(false);
+  // Terug uit de bevestigingsmail: /app/?verified=1
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get('verified');
+    if (v === null) return;
+    notify(v === '1' ? t.verify_done : t.verify_expired, v === '1' ? 'success' : 'error');
+    window.history.replaceState(null, '', '/app/');
+  }, []);
   useEffect(() => { if (account) mailAvailable().then(setCanMail); }, [account]);
   useEffect(() => {
     if (!inTrial || trialDaysLeft > 3 || view !== 'dashboard') return;

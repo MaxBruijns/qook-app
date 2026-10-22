@@ -54,6 +54,10 @@ assert.equal((await post('account/marketing', { opt_in: false }, bram)).data.mar
 
 // --- 4. E-mailreeks --------------------------------------------------------------------------
 assert.deepEqual(await runTrialMails(env), { sent: 0, skipped: 'e-mail niet ingesteld' }, 'zonder Resend gebeurt er niets');
+// Alleen bevestigde adressen krijgen de reeks
+env.RESEND_API_KEY = 're_test'; env.MAIL_FROM = 'Qook <hallo@myqook.test>';
+assert.equal((await runTrialMails(env)).sent, 0, 'nog niet bevestigd');
+sqlite.prepare('UPDATE users SET email_verified = 1').run();
 env.RESEND_API_KEY = 're_test'; env.MAIL_FROM = 'Qook <hallo@myqook.test>';
 const setDay = (email, day) => sqlite.prepare('UPDATE users SET trial_started_at = ? WHERE email = ?').run(new Date(Date.now() - day * 864e5 - 3600e3).toISOString(), email);
 const kinds = () => sqlite.prepare('SELECT u.email, l.kind FROM email_log l JOIN users u ON u.id = l.user_id ORDER BY l.kind').all().map(x => `${x.email.split('@')[0]}:${x.kind}`);

@@ -5,7 +5,8 @@ import { Button } from './Shared';
 import { X, Trash2, Heart, Check, Minus, Plus, Leaf, Users, Layout, Utensils, Clock, Banknote, Globe, Languages, MapPin, Lock, Stethoscope, Target, Zap, Settings, ChevronRight, Wine, Wand2, Crown, AlertTriangle, ChevronDown } from 'lucide-react';
 import { useTranslation, getSortedKitchenProfiles } from '../utils/i18n';
 import { getTasteState, setTasteProfile, clearTaste } from '../utils/tasteProfile';
-import type { AccountUser } from '../utils/account';
+import { AccountUser, changePassword, resendVerification, downloadMyData, mailAvailable } from '../utils/account';
+import { notify } from '../utils/notify';
 import { BUDGET_ZERO_WASTE } from './Onboarding';
 
 interface Props {
@@ -38,6 +39,44 @@ const LANGUAGES = [
     { val: 'nl-NL', label: 'Nederlands' },
     { val: 'en-US', label: 'English' }
 ];
+
+/** Wachtwoord wijzigen, e-mail bevestigen en gegevens downloaden. */
+const AccountTools: React.FC<{ account: AccountUser; t: any }> = ({ account, t }) => {
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [canMail, setCanMail] = useState(false);
+  useEffect(() => { mailAvailable().then(setCanMail); }, []);
+  const run = async (fn: () => Promise<any>, ok: string) => {
+    setBusy(true);
+    try { await fn(); notify(ok, 'success'); return true; }
+    catch (e: any) { notify(e?.message || t.auth_error, 'error'); return false; }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="space-y-3 text-sm">
+      {canMail && !account.verified && (
+        <div className="bg-kooq-clementine/10 border border-kooq-clementine/20 rounded-2xl px-4 py-3 space-y-2">
+          <p className="text-kooq-dark text-xs">{t.verify_needed}</p>
+          <button disabled={busy} onClick={() => run(resendVerification, t.verify_sent)} className="text-xs font-sans font-black underline underline-offset-4 text-kooq-dark">{t.verify_resend}</button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-x-5 gap-y-2">
+        <button onClick={() => setOpen(o => !o)} className="text-xs font-sans font-black underline underline-offset-4 text-kooq-dark">{t.change_password}</button>
+        <button disabled={busy} onClick={() => run(downloadMyData, t.data_downloaded)} className="text-xs font-sans font-black underline underline-offset-4 text-kooq-dark">{t.download_data}</button>
+      </div>
+      {open && (
+        <form className="space-y-2" onSubmit={async e => { e.preventDefault(); if (next.length < 8) { notify(t.password_min, 'error'); return; }
+            if (await run(() => changePassword(current, next), t.password_changed)) { setOpen(false); setCurrent(''); setNext(''); } }}>
+          <input id="pw-current" type="password" required autoComplete="current-password" placeholder={t.current_password} value={current} onChange={e => setCurrent(e.target.value)} className="w-full px-4 py-3 bg-kooq-white rounded-xl outline-none focus:ring-2 focus:ring-kooq-sage/20" />
+          <input id="pw-new" type="password" required minLength={8} autoComplete="new-password" placeholder={t.new_password} value={next} onChange={e => setNext(e.target.value)} className="w-full px-4 py-3 bg-kooq-white rounded-xl outline-none focus:ring-2 focus:ring-kooq-sage/20" />
+          <Button disabled={busy} className="w-full py-3">{t.save_password}</Button>
+        </form>
+      )}
+    </div>
+  );
+};
 
 /** Diëten waarbij een fout gevaarlijk kan zijn (allergie of intolerantie). */
 const ALLERGY_DIETS = ['Glutenarm', 'Lactosevrij', 'Notenvrij'];
@@ -386,6 +425,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                              <input id="settings-marketing" type="checkbox" defaultChecked={!!account.marketing} onChange={e => onToggleMarketing?.(e.target.checked)} className="mt-0.5 w-4 h-4 accent-kooq-sage" />
                              <span>{t.marketing_opt_in}</span>
                          </label>
+                         <AccountTools account={account} t={t} />
                          <Button onClick={onLogout} variant="secondary" className="w-full py-4">{t.logout}</Button>
                          <button onClick={() => { const pw = prompt(t.delete_account_confirm); if (pw) onDeleteAccount?.(pw); }} className="w-full text-center text-[11px] text-red-500 hover:text-red-600 underline underline-offset-4">{t.delete_account}</button>
                      </div>

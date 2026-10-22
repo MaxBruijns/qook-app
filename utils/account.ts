@@ -11,6 +11,7 @@ export interface AccountUser {
   subscription: 'free' | 'basic' | 'premium' | 'culinary';
   trial_started_at: string | null;
   marketing?: boolean;
+  verified?: boolean;
 }
 
 /** Wat iemand al met Qook gedaan heeft (aantallen), voor de proefbanner. */
@@ -256,3 +257,22 @@ export const mailAvailable = async () => {
 /** Boodschappenlijst naar het e-mailadres van het account. */
 export const emailShoppingList = (sections: { title: string; items: { name: string; amount: string; checked?: boolean }[] }[]) =>
   api('/account/email-list', 'POST', { sections });
+
+/** Wachtwoord wijzigen; andere apparaten worden uitgelogd. */
+export const changePassword = (current: string, password: string) => api('/account/password', 'POST', { current, password });
+
+/** Bevestigingsmail opnieuw sturen. */
+export const resendVerification = () => api('/account/verify-email', 'POST', {});
+
+/** Alles wat Qook over je bewaart, als bestand (inzagerecht). */
+export const downloadMyData = async () => {
+  const res = await fetch('/api/account/export', { credentials: 'same-origin' });
+  if (!res.ok) throw new Error('Downloaden lukte niet.');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `qook-gegevens-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+};
