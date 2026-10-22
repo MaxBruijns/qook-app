@@ -168,7 +168,13 @@ export default function App() {
   const [account] = useState<AccountUser | null>(() => getAccount());
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
-  const [shoppingList, setShoppingList] = useState<ShoppingItem[]>([]);
+  // De boodschappenlijst blijft bewaard (ook zonder internet in de winkel) en gaat mee naar je account.
+  const [shoppingList, setShoppingList] = useState<ShoppingItem[]>(() => {
+    try { return JSON.parse(localStorage.getItem('qook_shopping_list') || '[]'); } catch { return []; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('qook_shopping_list', JSON.stringify(shoppingList)); } catch {}
+  }, [shoppingList]);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   // Favoriete gerechten zelf bewaren, zodat ze ook na een nieuw weekmenu blijven bestaan.
   const [favoriteMeals, setFavoriteMeals] = useState<Meal[]>(() => {

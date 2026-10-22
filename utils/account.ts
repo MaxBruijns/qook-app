@@ -17,7 +17,7 @@ export interface AccountUser {
 export type AccountStats = Partial<Record<'plans' | 'lists' | 'recipes' | 'replaced' | 'scans' | 'cooked' | 'liked' | 'reused', number>>;
 
 export const SYNC_KEYS = ['qook_prefs', 'qook_current_plan', 'qook_favorites', 'qook_favorite_meals', 'qook_usage',
-  'qook_taste', 'qook_meal_history', 'qook_pantry_have', 'qook_shop_order'];
+  'qook_taste', 'qook_meal_history', 'qook_pantry_have', 'qook_shop_order', 'qook_shopping_list'];
 const ACCOUNT_KEY = 'qook_account';     // laatst bekende gebruiker (voor als het netwerk even weg is)
 const STAMPS_KEY = 'qook_sync_stamps';  // per sleutel: versie die dit apparaat heeft
 const DEBOUNCE_MS = 2000;
