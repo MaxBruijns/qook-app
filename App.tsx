@@ -12,6 +12,7 @@ import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult, Subs
 import { generateWeeklyPlan, generateShoppingList, analyzeFridgeImage, replaceMeal } from './services/geminiService';
 import { useTranslation, detectUserLocale } from './utils/i18n';
 import { recordTaste } from './utils/tasteProfile';
+import { AccountUser, getAccount, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword } from './utils/account';
 import { Calendar, Camera, ArrowRight, User, Mail, Lock, ArrowLeft, Globe, ChevronDown, Check, PartyPopper, Loader2, Info } from 'lucide-react';
 
 function getWeekNumber(d: Date) {
@@ -27,20 +28,43 @@ const stripImages = (p: WeeklyPlan): WeeklyPlan => ({
     days: p.days.map(m => ({ ...m, generated_image_url: undefined }))
 });
 
-const AuthView: React.FC<{ mode: 'login' | 'register', onSwitch: (m: 'login' | 'register') => void, onBack: () => void, onSuccess: (data: { name?: string, email: string }) => void, t: any }> = ({ mode, onSwitch, onBack, onSuccess, t }) => {
+type AuthMode = 'login' | 'register' | 'forgot' | 'reset';
+
+const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: AuthMode) => void, onBack: () => void, onSuccess: (user: AccountUser, mode: AuthMode) => void, t: any }> = ({ mode, resetToken, onSwitch, onBack, onSuccess, t }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+  const [resetAvailable, setResetAvailable] = useState<boolean | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    setError(''); setInfo('');
+    if (mode === 'forgot') passwordResetAvailable().then(setResetAvailable);
+  }, [mode]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(''); setInfo('');
+    if ((mode === 'register' || mode === 'reset') && password.length < 8) { setError(t.password_min); return; }
     setLoading(true);
-    setTimeout(() => {
+    try {
+        if (mode === 'login') onSuccess(await login(email, password), mode);
+        else if (mode === 'register') onSuccess(await register(name, email, password), mode);
+        else if (mode === 'reset') onSuccess(await resetPassword(resetToken || '', password), mode);
+        else { await requestPasswordReset(email); setInfo(t.forgot_sent); }
+    } catch (err: any) {
+        setError(err?.message || t.auth_error);
+    } finally {
         setLoading(false);
-        onSuccess({ name, email });
-    }, 1200);
+    }
   };
+
+  const title = mode === 'login' ? t.welcome_back : mode === 'register' ? t.join_qook : mode === 'forgot' ? t.forgot_password : t.new_password;
+  const button = mode === 'login' ? t.login_btn : mode === 'register' ? t.register_btn : mode === 'forgot' ? t.send_link : t.save_password;
+  const showEmail = mode !== 'reset';
+  const showPassword = mode !== 'forgot';
 
   return (
     <div className="min-h-screen relative flex flex-col items-center justify-center p-6 bg-kooq-white overflow-hidden">
@@ -52,41 +76,57 @@ const AuthView: React.FC<{ mode: 'login' | 'register', onSwitch: (m: 'login' | '
             <div className="bg-white/90 backdrop-blur-xl p-8 rounded-[2.5rem] shadow-2xl border border-white/50 space-y-6">
                 <div className="text-center space-y-2">
                     <div className="w-16 h-16 bg-kooq-sage rounded-2xl flex items-center justify-center text-white mx-auto shadow-lg mb-4 font-sans font-black text-2xl">Q</div>
-                    <h2 className="text-3xl font-sans font-black text-kooq-dark tracking-tighter">{mode === 'login' ? t.welcome_back : t.join_qook}</h2>
+                    <h2 className="text-3xl font-sans font-black text-kooq-dark tracking-tighter">{title}</h2>
+                    {mode === 'forgot' && <p className="text-sm text-kooq-slate">{t.forgot_intro}</p>}
                 </div>
+                {mode === 'forgot' && resetAvailable === false ? (
+                    <p className="text-sm text-kooq-slate text-center leading-relaxed">{t.forgot_unavailable}</p>
+                ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
                     {mode === 'register' && (
                         <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-300">
                             <label className="text-[10px] font-sans font-black text-kooq-slate uppercase tracking-widest px-1">{t.first_name}</label>
                             <div className="relative">
                                 <User className="absolute left-4 top-1/2 -translate-y-1/2 text-kooq-slate/40" size={18} />
-                                <input type="text" required value={name} onChange={e => setName(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-kooq-white border-none rounded-2xl outline-none focus:ring-2 focus:ring-kooq-sage/20 font-medium" placeholder={t.name_placeholder} />
+                                <input type="text" required autoComplete="given-name" value={name} onChange={e => setName(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-kooq-white border-none rounded-2xl outline-none focus:ring-2 focus:ring-kooq-sage/20 font-medium" placeholder={t.name_placeholder} />
                             </div>
                         </div>
                     )}
+                    {showEmail && (
                     <div className="space-y-1.5">
                         <label className="text-[10px] font-sans font-black text-kooq-slate uppercase tracking-widest px-1">{t.email_label}</label>
                         <div className="relative">
                             <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-kooq-slate/40" size={18} />
-                            <input type="email" required value={email} onChange={e => setEmail(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-kooq-white border-none rounded-2xl outline-none focus:ring-2 focus:ring-kooq-sage/20 font-medium" />
+                            <input type="email" required autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-kooq-white border-none rounded-2xl outline-none focus:ring-2 focus:ring-kooq-sage/20 font-medium" />
                         </div>
                     </div>
+                    )}
+                    {showPassword && (
                     <div className="space-y-1.5">
-                        <label className="text-[10px] font-sans font-black text-kooq-slate uppercase tracking-widest px-1">{t.password_label}</label>
+                        <label className="text-[10px] font-sans font-black text-kooq-slate uppercase tracking-widest px-1">{mode === 'reset' ? t.new_password : t.password_label}</label>
                         <div className="relative">
                             <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-kooq-slate/40" size={18} />
-                            <input type="password" required value={password} onChange={e => setPassword(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-kooq-white border-none rounded-2xl outline-none focus:ring-2 focus:ring-kooq-sage/20 font-medium" />
+                            <input type="password" required minLength={mode === 'login' ? undefined : 8} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={e => setPassword(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-kooq-white border-none rounded-2xl outline-none focus:ring-2 focus:ring-kooq-sage/20 font-medium" />
                         </div>
+                        {mode !== 'login' && <p className="text-[11px] text-kooq-slate px-1">{t.password_min}</p>}
                     </div>
-                    {mode === 'login' && <div className="text-right"><button type="button" className="text-xs font-sans font-black text-kooq-slate hover:text-kooq-dark">{t.forgot_password}</button></div>}
+                    )}
+                    {mode === 'login' && <div className="text-right"><button type="button" onClick={() => onSwitch('forgot')} className="text-xs font-sans font-black text-kooq-slate hover:text-kooq-dark">{t.forgot_password}</button></div>}
+                    {error && <p role="alert" className="text-sm text-red-600 bg-red-50 rounded-xl px-4 py-3">{error}</p>}
+                    {info && <p className="text-sm text-kooq-dark bg-kooq-sage/10 rounded-xl px-4 py-3">{info}</p>}
                     <Button disabled={loading} className="w-full py-5 text-lg font-sans font-black rounded-2xl shadow-xl active:scale-95 transition-all">
-                        {loading ? <Loader2 className="animate-spin" /> : mode === 'login' ? t.login_btn : t.register_btn}
+                        {loading ? <Loader2 className="animate-spin" /> : button}
                     </Button>
                 </form>
+                )}
                 <div className="text-center pt-4">
+                    {mode === 'forgot' || mode === 'reset' ? (
+                        <button onClick={() => onSwitch('login')} className="text-sm font-sans font-black text-kooq-dark underline underline-offset-4">{t.back_to_login}</button>
+                    ) : (
                     <button onClick={() => onSwitch(mode === 'login' ? 'register' : 'login')} className="text-sm text-kooq-slate font-medium">
                         {mode === 'login' ? t.no_account : t.has_account} <span className="font-sans font-black text-kooq-dark underline underline-offset-4 ml-1">{mode === 'login' ? t.register_btn : t.login_btn}</span>
                     </button>
+                    )}
                 </div>
             </div>
         </div>
@@ -98,7 +138,10 @@ export default function App() {
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
   const [plan, setPlan] = useState<WeeklyPlan | null>(null);
   const [userStatus, setUserStatus] = useState<SubscriptionStatus>('free');
-  const [view, setView] = useState<'choice' | 'onboarding' | 'dashboard' | 'favorites' | 'meal-detail' | 'cooking' | 'shopping' | 'scan-results' | 'login' | 'register'>('choice');
+  // Link uit de e-mail "wachtwoord vergeten": /?reset=<sleutel>
+  const [resetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '');
+  const [view, setView] = useState<'choice' | 'onboarding' | 'dashboard' | 'favorites' | 'meal-detail' | 'cooking' | 'shopping' | 'scan-results' | AuthMode>(resetToken ? 'reset' : 'choice');
+  const [account] = useState<AccountUser | null>(() => getAccount());
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
   const [shoppingList, setShoppingList] = useState<ShoppingItem[]>([]);
@@ -279,25 +322,36 @@ export default function App() {
     }
   };
 
-  const handleAuthSuccess = (data: { name?: string, email: string }) => {
-    const isRegistration = view === 'register';
-    const newStatus: SubscriptionStatus = isRegistration ? 'basic' : 'free';
-    
+  const handleAuthSuccess = (user: AccountUser, mode: AuthMode) => {
+    if (mode !== 'register') {
+        // Inloggen: de gegevens van het account staan nu op dit apparaat; opnieuw starten laadt ze.
+        window.location.replace('/');
+        return;
+    }
     const updatedPrefs = { 
         ...preferences!, 
-        name: data.name || preferences?.name,
-        subscriptionStatus: newStatus,
-        trialStartedAt: isRegistration ? new Date().toISOString() : preferences?.trialStartedAt
+        name: user.name,
+        subscriptionStatus: user.subscription as SubscriptionStatus,
+        trialStartedAt: user.trial_started_at || undefined
     };
-    
     setPreferences(updatedPrefs);
-    setUserStatus(newStatus);
+    setUserStatus(user.subscription as SubscriptionStatus);
     localStorage.setItem('qook_prefs', JSON.stringify(updatedPrefs));
-    
-    if (isRegistration) {
-        setShowTrialSuccess(true);
-    } else {
-        setView(plan ? 'dashboard' : 'choice');
+    setShowTrialSuccess(true);
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    window.location.replace('/');
+  };
+
+  const handleDeleteAccount = async (password: string) => {
+    try {
+        await deleteAccount(password);
+        alert(t.account_deleted);
+        window.location.replace('/');
+    } catch (e: any) {
+        alert(e?.message || t.auth_error);
     }
   };
 
@@ -470,7 +524,11 @@ export default function App() {
               <ArrowRight className="text-kooq-slate/30 group-hover:text-kooq-clementine transition-colors" size={24} />
             </button>
           </div>
+          {account ? (
+            <p className="text-center text-kooq-dark text-sm leading-relaxed drop-shadow-sm font-medium">{t.logged_in_as} <span className="font-sans font-black">{account.name}</span></p>
+          ) : (
           <button onClick={() => setView('login')} className="text-center text-kooq-dark text-sm transition-all animate-in fade-in duration-1000 delay-500 leading-relaxed drop-shadow-sm font-medium">{t.already_member}<br /><span className="font-sans font-black underline underline-offset-4">{t.login_here}</span></button>
+          )}
         </div>
         <input type="file" accept="image/*" ref={fileInputRef} onChange={async (e) => {
             const file = e.target.files?.[0]; if (!file) return;
@@ -523,8 +581,8 @@ export default function App() {
                 </div>
             </div>
         )}
-        {(view === 'login' || view === 'register') && (
-            <AuthView mode={view} onSwitch={(m) => setView(m)} onBack={() => setView(plan ? 'dashboard' : 'choice')} onSuccess={handleAuthSuccess} t={t} />
+        {(view === 'login' || view === 'register' || view === 'forgot' || view === 'reset') && (
+            <AuthView mode={view} resetToken={resetToken} onSwitch={(m) => setView(m)} onBack={() => { if (resetToken) window.history.replaceState(null, '', '/'); setView(plan ? 'dashboard' : 'choice'); }} onSuccess={handleAuthSuccess} t={t} />
         )}
         {view === 'dashboard' && plan && preferences && (
           <Dashboard 
@@ -602,7 +660,7 @@ export default function App() {
         {view === 'cooking' && selectedMeal && <CookingMode meal={selectedMeal} onClose={() => setView('dashboard')} language={currentLang} onFeedback={(_id, rating) => recordTaste(selectedMeal.title, rating === 'up' ? 'liked' : 'disliked')} />}
         {view === 'shopping' && <ShoppingList items={shoppingList} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => i.id === id ? {...i, checked: !i.checked} : i))} language={currentLang} />}
       </main>
-      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => { setPreferences(p); triggerRegeneration(p); }} onReset={() => { localStorage.clear(); window.location.reload(); }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
+      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => { setPreferences(p); triggerRegeneration(p); }} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
       <ChatAssistant 
         userPrefs={preferences || {} as any} 
         currentPlan={plan} 
@@ -616,6 +674,7 @@ export default function App() {
       />
       <PaywallModal isOpen={showPaywall} onClose={() => setShowPaywall(false)} onUpgrade={(tier) => { 
           setUserStatus(tier); 
+          saveSubscription(tier);
           if (preferences) { 
               const updated = { ...preferences, subscriptionStatus: tier, trialStartedAt: undefined }; 
               setPreferences(updated); 
