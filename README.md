@@ -37,3 +37,16 @@ npm run dev                 # website op poort 3000, /api gaat naar de backend
 ## Optioneel
 
 - `TEXT_MODEL` (variabele): ander Gemini-model, standaard `gemini-3.5-flash-lite` (alternatief: `gemini-3.8-flash`, beter maar duurder).
+- `RECIPE_MODEL` (variabele): model voor volledige recepten, standaard `gemini-3.8-flash`.
+- `ADMIN_KEY` (secret): zet je deze, dan kun je de receptenbank handmatig een ronde laten aanvullen met
+  `POST /api/admin/seed` en de header `x-admin-key: <jouw sleutel>`.
+- `SEED_DETAILS_PER_RUN` / `SEED_IMAGES_PER_RUN` (variabelen): hoeveel volledige recepten en foto's de
+  geplande taak per ronde maakt (standaard 2 en 1).
+
+## Receptenbank
+
+Elke 20 minuten vult een geplande taak (cron, staat in `wrangler.jsonc`) de receptenbank aan: eerst
+nieuwe gerechten per categorie (Hollands, Europees, wereld, kindvriendelijk, vegetarisch, snel, vis en
+drie culinaire categorieën; samen ±310), daarna volledige recepten en foto's. Een weekmenu wordt
+eerst uit de bank samengesteld; de AI maakt alleen wat ontbreekt. De voortgang zie je op `/api/health`
+onder `recipe_bank`.

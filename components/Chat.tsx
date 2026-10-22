@@ -142,7 +142,7 @@ export const ChatAssistant: React.FC<Props> = ({ userPrefs, currentPlan, userSta
         )}
       </div>
 
-      <div className={`fixed inset-x-0 bottom-0 md:inset-auto ${mdBottomPos} md:right-6 md:w-96 md:h-[600px] bg-white z-[60] flex flex-col shadow-2xl transition-all duration-300 transform rounded-t-[2.5rem] md:rounded-[2.5rem] border border-kooq-slate/10 overflow-hidden ${isOpen ? 'translate-y-0' : 'translate-y-full'}`}>
+      <div className={`fixed inset-x-0 bottom-0 md:inset-auto ${mdBottomPos} md:right-6 md:w-96 md:h-[600px] bg-white z-[60] flex flex-col shadow-2xl transition-all duration-300 transform rounded-t-[2.5rem] md:rounded-[2.5rem] border border-kooq-slate/10 overflow-hidden ${isOpen ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 invisible pointer-events-none'}`}>
         <div className="bg-kooq-sage p-6 flex items-center justify-between text-white shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-white/20 rounded-2xl flex items-center justify-center font-black">Q</div>

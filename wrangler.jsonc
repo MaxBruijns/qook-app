@@ -14,5 +14,9 @@
   "r2_buckets": [{ "binding": "PHOTOS", "bucket_name": "kooq-photos" }],
   // Workers AI voor de foto's (geen sleutel nodig).
   "ai": { "binding": "AI" },
+  // Cloudflare Images: foto's verkleinen naar webp (gratis tot 5000 per maand).
+  "images": { "binding": "IMAGES" },
+  // Receptenbank elke 20 minuten aanvullen (nieuwe gerechten, recepten en foto's).
+  "triggers": { "crons": ["*/20 * * * *"] },
   "observability": { "enabled": true }
 }

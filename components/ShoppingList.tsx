@@ -12,6 +12,13 @@ interface Props {
   language: string;
 }
 
+/** 1.5 -> "1,5"; 0 (zout, peper, naar smaak) -> niets. */
+const formatAmount = (item: ShoppingItem, language: string) => {
+  const n = Number(item.amount) || 0;
+  if (!n) return '';
+  return `${n.toLocaleString(language || 'nl-NL', { maximumFractionDigits: 1 })} ${item.unit || ''}`.trim();
+};
+
 export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, language }) => {
   const { t } = useTranslation(language);
   const grouped = items.reduce((acc, item) => { if (!acc[item.category]) acc[item.category] = []; acc[item.category].push(item); return acc; }, {} as Record<string, ShoppingItem[]>);
@@ -20,7 +27,7 @@ export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, la
       let text = `🛒 *Qook Boodschappenlijst*\n\n`;
       (Object.entries(grouped) as [string, ShoppingItem[]][]).forEach(([cat, items]) => {
           text += `*${cat}*\n`;
-          items.forEach(i => { text += `${i.checked ? '✅' : '☐'} ${i.name} (${i.amount} ${i.unit})\n`; });
+          items.forEach(i => { const a = formatAmount(i, language); text += `${i.checked ? '✅' : '☐'} ${i.name}${a ? ` (${a})` : ''}\n`; });
           text += `\n`;
       });
       window.open(`https://wa.me/?text=${encodeURIComponent(text)}`);
@@ -43,7 +50,7 @@ export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, la
                                  <div key={item.id} onClick={() => onToggleItem(item.id)} className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${item.checked ? 'bg-kooq-white border-transparent opacity-50' : 'bg-white border-kooq-slate/10'}`}>
                                      <div className={`mt-1 w-5 h-5 rounded-md border flex items-center justify-center ${item.checked ? 'bg-kooq-sage border-kooq-sage text-white' : 'border-kooq-slate/30'}`}>{item.checked && <Check size={14} />}</div>
                                      <div className="flex-1 min-w-0 font-medium">{item.name}</div>
-                                     <span className="text-sm font-semibold text-kooq-slate">{item.amount} {item.unit}</span>
+                                     <span className="text-sm font-semibold text-kooq-slate whitespace-nowrap">{formatAmount(item, language)}</span>
                                  </div>
                              ))}
                          </div>
