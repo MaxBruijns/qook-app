@@ -7,7 +7,10 @@
  *  - Beheer (/beheer/): overzicht van accounts, proeven, abonnementen, receptenbank en meldingen,
  *    alleen met de ADMIN_KEY.
  */
-export interface AdminEnv { DB: any; ADMIN_KEY?: string }
+import { BillingEnv, billingReady, revenueOverview, reconcile, ensureColumns } from './billing';
+import { ensureEngagementSchema } from './engagement';
+
+export interface AdminEnv extends BillingEnv { DB: any; ADMIN_KEY?: string }
 
 const DAY_MS = 864e5;
 const json = (data: unknown, status = 200) =>
@@ -26,6 +29,7 @@ export function ensureAdminSchema(db: any) {
     db.prepare('CREATE INDEX IF NOT EXISTS reports_recipe ON recipe_reports(recipe_id, status)'),
     db.prepare(`CREATE TABLE IF NOT EXISTS visits (day TEXT NOT NULL, page TEXT NOT NULL, count INTEGER NOT NULL,
       PRIMARY KEY (day, page))`),
+    db.prepare('CREATE TABLE IF NOT EXISTS admin_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
   ]).then(() => undefined).catch((e: any) => { ready = null; throw e; });
   return ready;
 }
@@ -114,8 +118,10 @@ async function overview(env: AdminEnv) {
     .bind(iso(now - 13 * DAY_MS).slice(0, 10)).all();
   const { results: reports } = await db.prepare(`SELECT r.id, r.recipe_id, r.title, r.kind, r.message, r.status, r.created_at,
       COALESCE(x.hidden, 0) AS hidden FROM recipe_reports r LEFT JOIN recipes x ON x.id = r.recipe_id
-      ORDER BY (r.status = 'open') DESC, r.created_at DESC LIMIT 60`).all();
-  return { generated_at: iso(now), users, activity, bank, visits: visits || [], reports: reports || [] };
+      ORDER BY (r.status = 'open') DESC, r.created_at DESC LIMIT 60`).all().catch(() => ({ results: [] }));
+  const rec = await db.prepare(`SELECT value FROM admin_state WHERE key = 'reconcile'`).first().catch(() => null);
+  return { generated_at: iso(now), users, activity, bank, visits: visits || [], reports: reports || [],
+    billing: billingReady(env), reconcile: rec ? JSON.parse(rec.value) : null };
 }
 
 /** Actie vanuit het beheerscherm op een gemeld recept. */
@@ -134,12 +140,82 @@ async function adminAction(env: AdminEnv, b: any) {
   return json({ ok: true });
 }
 
-/** /api/admin/overview en /api/admin/action (alleen met ADMIN_KEY). */
+/** Gebruikers zoeken op e-mail of naam (leeg = de nieuwste). */
+async function findUsers(env: AdminEnv, q: string) {
+  await ensureEngagementSchema(env.DB);
+  await ensureColumns(env.DB);
+  const like = `%${q.trim().toLowerCase().slice(0, 100)}%`;
+  const { results } = await env.DB.prepare(`SELECT u.id, u.name, u.email, u.subscription, u.trial_started_at, u.created_at,
+      u.last_login_at, u.email_verified, u.marketing_opt_in, u.stripe_customer_id,
+      (SELECT COALESCE(SUM(CASE WHEN key = 'plans' THEN count END), 0) FROM user_milestones m WHERE m.user_id = u.id) AS plans,
+      (SELECT COALESCE(SUM(CASE WHEN key = 'lists' THEN count END), 0) FROM user_milestones m WHERE m.user_id = u.id) AS lists
+    FROM users u WHERE lower(u.email) LIKE ? OR lower(u.name) LIKE ? ORDER BY u.created_at DESC LIMIT 25`).bind(like, like).all();
+  return (results || []).map((u: any) => {
+    const trialLeft = u.subscription === 'trial' && u.trial_started_at
+      ? Math.max(0, 14 - Math.floor((Date.now() - new Date(u.trial_started_at).getTime()) / DAY_MS)) : null;
+    return { ...u, status: u.subscription === 'trial' ? (trialLeft ? 'proef' : 'gratis (proef voorbij)') : u.subscription, trial_days_left: trialLeft };
+  });
+}
+
+/** Handmatige acties op een gebruiker (bijv. testers een abonnement geven of de proef verlengen). */
+async function userAction(env: AdminEnv, b: any) {
+  const id = String(b.id || '');
+  const user = await env.DB.prepare('SELECT id, subscription, trial_started_at FROM users WHERE id = ?').bind(id).first();
+  if (!user) return json({ detail: 'Gebruiker niet gevonden' }, 404);
+  switch (b.action) {
+    case 'extend_trial': {
+      // 7 dagen erbij; was de proef al voorbij, dan een nieuwe week vanaf nu.
+      const start = user.subscription === 'trial' && user.trial_started_at ? new Date(user.trial_started_at).getTime() : Date.now() - 14 * DAY_MS;
+      const newStart = Math.max(start, Date.now() - 14 * DAY_MS) + 7 * DAY_MS;
+      await env.DB.prepare(`UPDATE users SET subscription = 'trial', trial_started_at = ? WHERE id = ?`).bind(new Date(newStart).toISOString(), id).run();
+      break;
+    }
+    case 'grant':
+      if (!['free', 'basic', 'premium', 'culinary'].includes(b.tier)) return json({ detail: 'Onbekend abonnement' }, 400);
+      await env.DB.prepare('UPDATE users SET subscription = ?, trial_started_at = NULL WHERE id = ?').bind(b.tier, id).run();
+      break;
+    case 'verify':
+      await env.DB.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').bind(id).run();
+      break;
+    default: return json({ detail: 'Onbekende actie' }, 400);
+  }
+  return json({ ok: true });
+}
+
+/** Eén keer per dag: Stripe en de database vergelijken (vanuit de geplande taak). */
+export async function dailyAdminTasks(env: AdminEnv, now = Date.now()) {
+  if (!billingReady(env)) return null;
+  await ensureAdminSchema(env.DB);
+  const today = new Date(now).toISOString().slice(0, 10);
+  const last = await env.DB.prepare(`SELECT value FROM admin_state WHERE key = 'reconcile'`).first();
+  if (last && JSON.parse(last.value).at?.slice(0, 10) === today) return null;
+  const result = await reconcile(env);
+  if (result) await env.DB.prepare(`INSERT INTO admin_state (key, value) VALUES ('reconcile', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value`).bind(JSON.stringify(result)).run();
+  return result;
+}
+
+const ADMIN_PATHS = ['/api/admin/overview', '/api/admin/action', '/api/admin/revenue', '/api/admin/users', '/api/admin/user', '/api/admin/reconcile'];
+
+/** /api/admin/* (alleen met ADMIN_KEY). */
 export async function handleAdmin(req: Request, env: AdminEnv, path: string): Promise<Response | null> {
-  if (path !== '/api/admin/overview' && path !== '/api/admin/action') return null;
+  if (!ADMIN_PATHS.includes(path)) return null;
   if (!isAdmin(req, env)) return json({ detail: 'Niet gevonden' }, 404);
   await ensureAdminSchema(env.DB);
-  if (req.method === 'GET' && path === '/api/admin/overview') return json(await overview(env));
-  if (req.method === 'POST' && path === '/api/admin/action') return adminAction(env, await req.json().catch(() => ({})));
+  const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
+  try {
+    if (req.method === 'GET' && path === '/api/admin/overview') return json(await overview(env));
+    if (req.method === 'POST' && path === '/api/admin/action') return adminAction(env, body);
+    if (req.method === 'GET' && path === '/api/admin/revenue') return json(await revenueOverview(env));
+    if (req.method === 'GET' && path === '/api/admin/users') return json({ users: await findUsers(env, new URL(req.url).searchParams.get('q') || '') });
+    if (req.method === 'POST' && path === '/api/admin/user') return userAction(env, body);
+    if (req.method === 'POST' && path === '/api/admin/reconcile') {
+      await env.DB.prepare(`DELETE FROM admin_state WHERE key = 'reconcile'`).run();
+      return json(await dailyAdminTasks(env) || { enabled: false });
+    }
+  } catch (e: any) {
+    console.error('Beheer', path, e?.message || e);
+    return json({ detail: 'Ophalen lukte niet: ' + String(e?.message || e).slice(0, 120) }, 502);
+  }
   return json({ detail: 'Niet gevonden' }, 404);
 }

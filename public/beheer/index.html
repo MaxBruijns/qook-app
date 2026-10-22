@@ -6,36 +6,61 @@
 <meta name="robots" content="noindex, nofollow" />
 <title>Qook beheer</title>
 <style>
-:root { --bg: #F5F7F4; --paper: #fff; --ink: #2A3338; --muted: #5D6E76; --sage: #94B79D; --sage-deep: #5E8A69; --line: #DCE3DD; --warn: #C2410C; }
+:root { --bg: #F5F7F4; --paper: #fff; --ink: #2A3338; --muted: #5D6E76; --sage: #94B79D; --sage-deep: #5E8A69;
+  --line: #DCE3DD; --warn: #C2410C; --warn-bg: #FDF0E8; --good-bg: #E8F2EA; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 1100px; margin: 0 auto; padding: 24px max(16px, env(safe-area-inset-left, 0px)) 64px; display: grid; gap: 24px; }
-h1 { font-size: 1.5rem; margin: 0; } h2 { font-size: 1rem; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--sage-deep); }
+header { position: sticky; top: 0; z-index: 2; background: var(--paper); border-bottom: 1px solid var(--line); }
+header .in { max-width: 1150px; margin: 0 auto; padding: 12px max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; }
+header b { font-size: 1.1rem; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; }
+nav button { border: 0; background: none; padding: 8px 12px; border-radius: 10px; cursor: pointer; font: inherit; color: var(--muted); }
+nav button[aria-current="page"] { background: var(--ink); color: #fff; }
+nav button .dot { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: var(--warn); color: #fff; font-size: .72rem; }
+.right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+main { max-width: 1150px; margin: 0 auto; padding: 24px max(16px, env(safe-area-inset-left, 0px)) 64px; display: grid; gap: 20px; }
+h2 { font-size: .8rem; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--sage-deep); }
 .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 20px; min-width: 0; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-.stat b { display: block; font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+.stat b { display: block; font-size: 1.7rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .stat span { color: var(--muted); font-size: .85rem; }
+.stat.big b { font-size: clamp(1.7rem, 4vw, 2.2rem); white-space: nowrap; }
+main > *, .two > * { min-width: 0; }
+.alert { border-radius: 12px; padding: 10px 14px; background: var(--warn-bg); color: var(--warn); font-size: .9rem; }
+.ok { border-radius: 12px; padding: 10px 14px; background: var(--good-bg); color: var(--sage-deep); font-size: .9rem; }
+[hidden] { display: none !important; }
 .bars { display: grid; gap: 6px; }
-.bar { display: grid; grid-template-columns: 90px 1fr 60px; gap: 10px; align-items: center; font-size: .85rem; font-variant-numeric: tabular-nums; }
-.bar i { display: block; height: 10px; border-radius: 5px; background: var(--sage); }
-.bar i.app { background: var(--ink); }
+.bar { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.bar .track { display: flex; gap: 2px; min-width: 0; }
+.bar > span:last-child { white-space: nowrap; color: var(--muted); }
+.bar i { display: block; height: 12px; border-radius: 6px; background: var(--sage); }
+.bar i.dark { background: var(--ink); }
 .table { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: .88rem; }
 th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; }
-button { font: inherit; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 4px 8px; cursor: pointer; margin: 2px; }
+th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+button, select { font: inherit; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 4px 8px; cursor: pointer; margin: 2px; color: var(--ink); }
 button:hover { border-color: var(--sage); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--sage); outline-offset: 2px; }
 .pill { font-size: .75rem; padding: 2px 8px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); white-space: nowrap; }
-.pill.open { border-color: var(--warn); color: var(--warn); }
-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill.warn { border-color: var(--warn); color: var(--warn); }
+.pill.good { border-color: var(--sage); color: var(--sage-deep); }
+form.row { display: flex; gap: 8px; flex-wrap: wrap; }
 input { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); min-width: 0; flex: 1; }
 .muted { color: var(--muted); font-size: .85rem; }
+a { color: var(--sage-deep); }
 </style>
 </head>
 <body>
+<header><div class="in">
+  <b>Qook beheer</b>
+  <nav id="tabs" hidden aria-label="Onderdelen"></nav>
+  <div class="right"><span id="updated" class="muted"></span><button id="refresh" hidden>Vernieuwen</button></div>
+</div></header>
 <main>
-  <h1>Qook beheer</h1>
-  <form id="login" class="panel">
+  <form id="login" class="panel row">
     <input id="key" type="password" placeholder="Beheersleutel (ADMIN_KEY)" autocomplete="off" />
     <button type="submit">Openen</button>
   </form>
@@ -44,78 +69,175 @@ input { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px soli
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-let key = '';
-try { key = sessionStorage.getItem('qook_admin') || ''; } catch {}
+const eur = (cents) => (Number(cents || 0) / 100).toLocaleString('nl-NL', { style: 'currency', currency: 'EUR' });
+const date = (v) => v ? new Date(String(v).replace(' ', 'T') + (String(v).includes('T') ? '' : 'Z')).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' }) : '–';
+const stat = (label, value, cls = '') => `<div class="stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
+let key = ''; try { key = sessionStorage.getItem('qook_admin') || ''; } catch {}
+let tab = (location.hash || '#overzicht').slice(1);
+let data = null, revenue = null, users = null, query = '';
 
 async function api(path, body) {
-  const res = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'x-admin-key': key, 'content-type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined });
-  if (!res.ok) throw new Error(res.status === 404 ? 'Sleutel klopt niet' : 'Fout ' + res.status);
-  return res.json();
+  const res = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'x-admin-key': key, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(res.status === 404 && !out.detail?.includes('niet') ? 'Sleutel klopt niet' : (out.detail || 'Fout ' + res.status));
+  return out;
 }
 
-function stat(label, value) { return `<div class="stat"><b>${value}</b><span>${label}</span></div>`; }
+const TABS = [['overzicht', 'Overzicht'], ['omzet', 'Omzet'], ['gebruikers', 'Gebruikers'], ['recepten', 'Receptenbank'], ['meldingen', 'Meldingen']];
+function renderTabs() {
+  const open = (data?.reports || []).filter(r => r.status === 'open').length;
+  $('#tabs').innerHTML = TABS.map(([id, label]) => `<button data-tab="${id}" ${tab === id ? 'aria-current="page"' : ''}>${label}${id === 'meldingen' && open ? `<span class="dot">${open}</span>` : ''}</button>`).join('');
+}
 
-async function load() {
-  const d = await api('/api/admin/overview');
-  $('#login').hidden = true;
-  const u = d.users, a = d.activity, b = d.bank;
-  const paid = u.basic + u.premium + u.culinary;
-  const ended = u.trial_ended_unpaid + paid;
-  const days = {};
-  for (const v of d.visits) (days[v.day] ||= {})[v.page] = v.count;
+function viewOverview() {
+  const u = data.users, a = data.activity;
+  const paid = u.basic + u.premium + u.culinary, ended = u.trial_ended_unpaid + paid;
+  const alerts = [];
+  const open = data.reports.filter(r => r.status === 'open').length;
+  if (open) alerts.push(`${open} open melding(en) over recepten`);
+  if (revenue?.past_due?.length) alerts.push(`${revenue.past_due.length} mislukte betaling(en)`);
+  if (data.reconcile?.fixed?.length) alerts.push(`Stripe-controle zette ${data.reconcile.fixed.length} abonnement(en) recht`);
+  const days = {}; for (const v of data.visits) (days[v.day] ||= {})[v.page] = v.count;
   const max = Math.max(1, ...Object.values(days).map(x => (x.landing || 0) + (x.app || 0)));
-  $('#content').innerHTML = `
-    <section class="panel"><h2>Accounts</h2><div class="grid">
-      ${stat('accounts', u.total)}${stat('nieuw (7 dagen)', u.new_7d)}${stat('nieuw (30 dagen)', u.new_30d)}
-      ${stat('in proef', u.trial_active)}${stat('betalend', paid)}
-      ${stat('omzetting na proef', ended ? Math.round(paid / ended * 100) + '%' : '–')}
-      ${stat('Basic / Premium / Culinair', `${u.basic} / ${u.premium} / ${u.culinary}`)}
-      ${stat('tips per e-mail', u.marketing_opt_in)}${stat('e-mail bevestigd', u.verified)}
-    </div></section>
-    <section class="panel"><h2>Gebruik</h2><div class="grid">
-      ${stat('actief (7 dagen)', a.active_7d)}${stat("weekmenu's", a.plans_total)}${stat('boodschappenlijsten', a.lists_total)}
+  return `
+    ${alerts.length ? `<div class="alert">${alerts.map(esc).join(' · ')}</div>` : '<div class="ok">Alles in orde.</div>'}
+    <section class="panel"><h2>Kerncijfers</h2><div class="grid">
+      ${revenue?.enabled ? stat('omzet per maand (MRR)', eur(revenue.mrr_cents), 'big') : ''}
+      ${stat('betalend', paid, 'big')}${stat('in proef', u.trial_active, 'big')}
+      ${stat('omzetting na proef', ended ? Math.round(paid / ended * 100) + '%' : '–', 'big')}
+      ${stat('accounts', u.total)}${stat('nieuw (7 dagen)', u.new_7d)}${stat('actief (7 dagen)', a.active_7d)}
+      ${stat("weekmenu's", a.plans_total)}${stat('boodschappenlijsten', a.lists_total)}
     </div></section>
     <section class="panel"><h2>Bezoek (14 dagen)</h2><div class="bars">
-      ${Object.keys(days).sort().map(day => { const x = days[day]; const l = x.landing || 0, p = x.app || 0;
-        return `<div class="bar"><span>${day.slice(5)}</span><span style="display:flex;gap:2px"><i style="width:${l / max * 100}%"></i><i class="app" style="width:${p / max * 100}%"></i></span><span>${l} · ${p}</span></div>`; }).join('') || '<p class="muted">Nog geen bezoek geteld.</p>'}
-      <p class="muted">Groen: voorpagina, donker: app. Zonder cookies, zonder IP-adressen.</p>
-    </div></section>
-    <section class="panel"><h2>Receptenbank</h2><div class="grid">
-      ${stat('gerechten', b.total)}${stat('met recept', b.with_recipe)}${stat('met foto', b.with_photo)}${stat('uit de bank (gemeld)', b.hidden)}
-    </div></section>
-    <section class="panel"><h2>Meldingen</h2><div class="table"><table>
-      <tr><th>Gerecht</th><th>Soort</th><th>Toelichting</th><th>Status</th><th>Actie</th></tr>
-      ${d.reports.map(r => `<tr>
-        <td>${esc(r.title)}${r.hidden ? ' <span class="pill">uit de bank</span>' : ''}<div class="muted">${new Date(r.created_at).toLocaleString('nl-NL')}</div></td>
-        <td>${esc(r.kind)}</td><td>${esc(r.message) || '<span class="muted">–</span>'}</td>
-        <td><span class="pill ${r.status === 'open' ? 'open' : ''}">${esc(r.status)}</span></td>
-        <td>
-          <button data-a="resolve" data-id="${esc(r.recipe_id)}">Opgelost</button>
-          <button data-a="${r.hidden ? 'unhide' : 'hide'}" data-id="${esc(r.recipe_id)}">${r.hidden ? 'Terug in bank' : 'Uit bank'}</button>
-          <button data-a="new_photo" data-id="${esc(r.recipe_id)}">Nieuwe foto</button>
-          <button data-a="new_recipe" data-id="${esc(r.recipe_id)}">Recept opnieuw</button>
-        </td></tr>`).join('') || '<tr><td colspan="5" class="muted">Geen meldingen.</td></tr>'}
-    </table></div></section>
-    <p class="muted">Bijgewerkt: ${new Date(d.generated_at).toLocaleString('nl-NL')}</p>`;
-  $('#content').hidden = false;
+      ${Object.keys(days).sort().map(day => { const x = days[day], l = x.landing || 0, p = x.app || 0;
+        return `<div class="bar"><span>${day.slice(8)}-${day.slice(5, 7)}</span><span class="track"><i style="width:${l / max * 100}%"></i><i class="dark" style="width:${p / max * 100}%"></i></span><span>${l} voorpag. · ${p} app</span></div>`; }).join('') || '<p class="muted">Nog geen bezoek geteld.</p>'}
+      <p class="muted">Groen: voorpagina, donker: app. Zonder cookies en zonder IP-adressen.</p>
+    </div></section>`;
 }
 
+function viewRevenue() {
+  if (!data.billing) return `<section class="panel"><h2>Omzet</h2><p>Betalen staat nog uit: de Stripe-sleutels zijn nog niet ingesteld (zie de README). Zodra dat gebeurd is, zie je hier de omzet.</p>
+    <p class="muted">Tot die tijd: ${data.users.basic + data.users.premium + data.users.culinary} account(s) met een abonnement dat in de app is gekozen.</p></section>`;
+  if (!revenue) return '<section class="panel"><p class="muted">Omzet ophalen uit Stripe…</p></section>';
+  if (revenue.error) return `<section class="panel"><div class="alert">${esc(revenue.error)}</div></section>`;
+  const r = revenue, months = Object.entries(r.months), max = Math.max(1, ...months.map(([, m]) => m.amount));
+  const rec = data.reconcile;
+  return `
+    <section class="panel"><h2>Nu</h2><div class="grid">
+      ${stat('omzet per maand (MRR)', eur(r.mrr_cents), 'big')}${stat('omzet per jaar (ARR)', eur(r.mrr_cents * 12), 'big')}
+      ${stat('actieve abonnementen', r.active, 'big')}
+      ${stat('nieuw deze maand', r.new_this_month)}${stat('opgezegd deze maand', r.canceled_this_month)}
+      ${stat('opgezegd, loopt nog af', r.cancelling)}${stat(`verlengt binnen 30 dagen (${r.renewals_30d.count})`, eur(r.renewals_30d.amount_cents))}
+    </div></section>
+    <div class="two">
+      <section class="panel"><h2>Per abonnement</h2><div class="table"><table>
+        <tr><th>Abonnement</th><th class="num">Actief</th></tr>
+        ${Object.entries(r.per_plan).sort((a, b) => b[1] - a[1]).map(([p, n]) => `<tr><td>${esc(p)}</td><td class="num">${n}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">Nog geen abonnementen.</td></tr>'}
+      </table></div></section>
+      <section class="panel"><h2>Betaald per maand</h2><div class="bars">
+        ${months.map(([m, v]) => `<div class="bar"><span>${new Date(m + '-15').toLocaleDateString('nl-NL', { month: 'short' }).replace('.', '')} ’${m.slice(2, 4)}</span><span class="track"><i style="width:${v.amount / max * 100}%"></i></span><span>${eur(v.amount)} (${v.count})</span></div>`).join('')}
+        <p class="muted">Bedragen inclusief btw, vóór Stripe-kosten.</p>
+      </div></section>
+    </div>
+    <section class="panel"><h2>Aandacht</h2>
+      ${r.past_due.length ? `<div class="alert">${r.past_due.length} klant(en) met een mislukte betaling. Stripe probeert het automatisch opnieuw en mailt de klant.</div>` : '<div class="ok">Geen mislukte betalingen.</div>'}
+      <p style="margin-top:12px">${rec ? `Laatste controle Stripe ↔ Qook: ${new Date(rec.at).toLocaleString('nl-NL')} — ${rec.checked} account(s) gecontroleerd, ${rec.fixed.length} rechtgezet${rec.unknown_customers ? `, ${rec.unknown_customers} betalende klant(en) zonder Qook-account` : ''}.` : 'Nog geen controle gedraaid.'}
+      <button data-reconcile>Nu controleren</button></p>
+      ${rec?.fixed?.length ? `<div class="table"><table><tr><th>Account</th><th>Was</th><th>Nu</th></tr>${rec.fixed.map(f => `<tr><td>${esc(f.email)}</td><td>${esc(f.from)}</td><td>${esc(f.to)}</td></tr>`).join('')}</table></div>` : ''}
+      <p class="muted">Facturen, terugbetalingen en uitbetalingen beheer je in het <a href="https://dashboard.stripe.com" target="_blank" rel="noopener">Stripe-dashboard</a>.</p>
+    </section>`;
+}
+
+function viewUsers() {
+  const statusPill = (u) => { const s = u.status; const cls = ['basic', 'premium', 'culinary'].includes(s) ? 'good' : s === 'proef' ? '' : 'warn';
+    return `<span class="pill ${cls}">${esc(s)}${u.trial_days_left ? ` · nog ${u.trial_days_left} d` : ''}</span>${u.stripe_customer_id ? ' <span class="pill">Stripe</span>' : ''}`; };
+  return `
+    <section class="panel"><h2>Gebruikers</h2>
+      <form id="search" class="row"><input id="q" placeholder="Zoek op e-mail of naam" value="${esc(query)}" /><button type="submit">Zoeken</button></form>
+      <div class="table" style="margin-top:12px"><table>
+        <tr><th>Naam / e-mail</th><th>Status</th><th>Sinds</th><th>Laatst actief</th><th class="num">Menu's</th><th class="num">Lijsten</th><th>E-mail</th><th>Acties</th></tr>
+        ${(users || []).map(u => `<tr>
+          <td>${esc(u.name)}<div class="muted">${esc(u.email)}</div></td>
+          <td>${statusPill(u)}</td><td>${date(u.created_at)}</td><td>${date(u.last_login_at)}</td>
+          <td class="num">${u.plans}</td><td class="num">${u.lists}</td>
+          <td>${u.email_verified ? '<span class="pill good">bevestigd</span>' : '<span class="pill">niet bevestigd</span>'}${u.marketing_opt_in ? ' <span class="pill">tips</span>' : ''}</td>
+          <td>
+            <button data-user="${esc(u.id)}" data-act="extend_trial">+7 dagen proef</button>
+            <select data-user="${esc(u.id)}" data-act="grant" aria-label="Abonnement geven"><option value="">Abonnement geven…</option><option value="basic">Basic</option><option value="premium">Premium</option><option value="culinary">Culinair</option><option value="free">Gratis</option></select>
+            ${u.email_verified ? '' : `<button data-user="${esc(u.id)}" data-act="verify">E-mail bevestigen</button>`}
+          </td></tr>`).join('') || `<tr><td colspan="8" class="muted">${users ? 'Geen gebruikers gevonden.' : 'Laden…'}</td></tr>`}
+      </table></div>
+      <p class="muted">"Abonnement geven" is handig voor testers en vrienden; het gaat buiten Stripe om en kost niets. Een betaald Stripe-abonnement wijzig je in Stripe.</p>
+    </section>`;
+}
+
+function viewBank() {
+  const b = data.bank;
+  return `<section class="panel"><h2>Receptenbank</h2><div class="grid">
+    ${stat('gerechten', b.total, 'big')}${stat('met volledig recept', b.with_recipe)}${stat('met foto', b.with_photo)}${stat('uit de bank (gemeld)', b.hidden)}
+  </div><p class="muted">De bank vult zich elke 20 minuten aan. Gemelde recepten beheer je onder Meldingen.</p></section>`;
+}
+
+function viewReports() {
+  return `<section class="panel"><h2>Meldingen over recepten</h2><div class="table"><table>
+    <tr><th>Gerecht</th><th>Soort</th><th>Toelichting</th><th>Status</th><th>Actie</th></tr>
+    ${data.reports.map(r => `<tr>
+      <td>${esc(r.title)}${r.hidden ? ' <span class="pill warn">uit de bank</span>' : ''}<div class="muted">${new Date(r.created_at).toLocaleString('nl-NL')}</div></td>
+      <td>${esc(r.kind)}</td><td>${esc(r.message) || '<span class="muted">–</span>'}</td>
+      <td><span class="pill ${r.status === 'open' ? 'warn' : ''}">${esc(r.status)}</span></td>
+      <td><button data-a="resolve" data-id="${esc(r.recipe_id)}">Opgelost</button>
+        <button data-a="${r.hidden ? 'unhide' : 'hide'}" data-id="${esc(r.recipe_id)}">${r.hidden ? 'Terug in bank' : 'Uit bank'}</button>
+        <button data-a="new_photo" data-id="${esc(r.recipe_id)}">Nieuwe foto</button>
+        <button data-a="new_recipe" data-id="${esc(r.recipe_id)}">Recept opnieuw</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Geen meldingen.</td></tr>'}
+  </table></div></section>`;
+}
+
+function render() {
+  renderTabs();
+  const views = { overzicht: viewOverview, omzet: viewRevenue, gebruikers: viewUsers, recepten: viewBank, meldingen: viewReports };
+  $('#content').innerHTML = (views[tab] || viewOverview)();
+  $('#updated').textContent = data ? 'Bijgewerkt ' + new Date(data.generated_at || Date.now()).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' }) : '';
+}
+
+async function loadUsers() { users = (await api('/api/admin/users?q=' + encodeURIComponent(query))).users; render(); }
+async function loadRevenue() {
+  if (!data?.billing) return;
+  try { revenue = await api('/api/admin/revenue'); } catch (e) { revenue = { error: e.message }; }
+  render();
+}
+async function load() {
+  data = await api('/api/admin/overview');
+  $('#login').hidden = true; $('#content').hidden = false; $('#tabs').hidden = false; $('#refresh').hidden = false;
+  render();
+  loadRevenue();
+  if (tab === 'gebruikers') loadUsers();
+}
+
+$('#tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]'); if (!b) return;
+  tab = b.dataset.tab; history.replaceState(null, '', '#' + tab); render();
+  if (tab === 'gebruikers' && !users) loadUsers();
+});
+$('#refresh').addEventListener('click', () => { users = null; revenue = null; load().then(() => tab === 'gebruikers' && loadUsers()); });
+$('#content').addEventListener('submit', (e) => { if (e.target.id !== 'search') return; e.preventDefault(); query = $('#q').value; loadUsers(); });
 $('#content').addEventListener('click', async (e) => {
-  const btn = e.target.closest('button[data-a]');
-  if (!btn) return;
-  btn.disabled = true;
-  try { await api('/api/admin/action', { action: btn.dataset.a, recipe_id: btn.dataset.id }); await load(); }
-  catch (err) { btn.disabled = false; btn.textContent = err.message; }
+  const rep = e.target.closest('button[data-a]');
+  if (rep) { rep.disabled = true; try { await api('/api/admin/action', { action: rep.dataset.a, recipe_id: rep.dataset.id }); await load(); } catch (err) { rep.textContent = err.message; } return; }
+  const act = e.target.closest('button[data-act]');
+  if (act) { act.disabled = true; try { await api('/api/admin/user', { id: act.dataset.user, action: act.dataset.act }); await loadUsers(); } catch (err) { act.textContent = err.message; } return; }
+  const rc = e.target.closest('button[data-reconcile]');
+  if (rc) { rc.disabled = true; rc.textContent = 'Bezig…'; try { await api('/api/admin/reconcile', {}); await load(); } catch (err) { rc.textContent = err.message; } }
 });
-
+$('#content').addEventListener('change', async (e) => {
+  const sel = e.target.closest('select[data-act="grant"]'); if (!sel || !sel.value) return;
+  sel.disabled = true;
+  try { await api('/api/admin/user', { id: sel.dataset.user, action: 'grant', tier: sel.value }); await loadUsers(); } catch (err) { alert(err.message); }
+});
 $('#login').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  key = $('#key').value.trim();
-  try { await load(); try { sessionStorage.setItem('qook_admin', key); } catch {} }
-  catch (err) { $('#key').value = ''; $('#key').placeholder = err.message; }
+  e.preventDefault(); key = $('#key').value.trim();
+  try { await load(); try { sessionStorage.setItem('qook_admin', key); } catch {} } catch (err) { $('#key').value = ''; $('#key').placeholder = err.message; }
 });
-
+window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (t && t !== tab && TABS.some(([id]) => id === t)) { tab = t; if (data) { render(); if (tab === 'gebruikers' && !users) loadUsers(); } } });
 if (key) load().catch(() => { $('#login').hidden = false; });
 </script>
 </body>
