@@ -130,12 +130,6 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      try {
-        if (window.aistudio && !(await window.aistudio.hasSelectedApiKey())) {
-            await window.aistudio.openSelectKey();
-        }
-      } catch (e) {}
-
       const savedUsage = localStorage.getItem('qook_usage');
       const currentWeek = getWeekNumber(new Date());
       if (savedUsage) {

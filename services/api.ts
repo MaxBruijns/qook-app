@@ -1,177 +1,146 @@
-
-Copy
-
-import { supabase } from '../utils/supabase';
- 
+// Alle AI-aanroepen lopen via de KOOQ-backend op Render.
+// Er staat hier bewust GEEN API-sleutel: die staan alleen op de server.
 const API_URL = 'https://qook-backend.onrender.com';
- 
-// --- WEEKPLAN GENEREREN ---
-export const generateWeeklyPlan = async (prefs: any, favoriteTitles: string[] = []) => {
-    const res = await fetch(`${API_URL}/generate-weekly-plan`, {
+
+const post = async (path: string, body: any) => {
+    const res = await fetch(`${API_URL}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            ...prefs,
-            user_id: prefs.user_id || 'demo-user',
-            favorite_titles: favoriteTitles
-        })
+        body: JSON.stringify(body),
     });
- 
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Server error: ${res.status}`);
+        throw new Error(err.detail || `Serverfout ${res.status}`);
     }
- 
-    const data = await res.json();
- 
+    return res.json();
+};
+
+const normalizeMeal = (m: any) => ({
+    ...m,
+    time: m.estimated_time_minutes || 30,
+    calories: m.calories_per_portion || 500,
+    image_url: m.image_url || null,
+});
+
+// --- WEEKPLAN ---
+export const generateWeeklyPlan = async (prefs: any, favoriteTitles: string[] = []) => {
+    const data = await post('/generate-weekly-plan', {
+        ...prefs,
+        user_id: prefs.user_id || 'demo-user',
+        favorite_titles: favoriteTitles,
+    });
     return {
-        days: data.days.map((r: any) => ({
-            ...r,
-            id: r.id || `day_${r.day_number}_${Date.now()}`,
-            time: r.estimated_time_minutes || 30,
-            calories: r.calories_per_portion || 500,
-            image_url: r.image_url || null,
-            generated_image_url: r.image_url || null,
-        })),
+        days: data.days.map(normalizeMeal),
         zero_waste_report: data.zero_waste_report,
-        generatedAt: new Date().toISOString()
+        generatedAt: new Date().toISOString(),
     };
 };
- 
-// --- VOLLEDIGE RECEPT DETAILS ---
-export const generateFullRecipe = async (meal: any) => {
-    // Gebruik data uit de bank als die er al is
+
+// --- RECEPTDETAILS ---
+export const generateFullRecipe = async (meal: any, _prefs?: any) => {
     if (meal.steps && meal.steps.length > 0) return meal;
- 
-    const res = await fetch(`${API_URL}/get-recipe-details`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ meal_id: meal.id })
-    });
- 
-    if (!res.ok) return meal;
- 
-    const data = await res.json();
-    return { ...meal, ...data.details };
+    try {
+        const data = await post('/get-recipe-details', { meal_id: meal.id });
+        return { ...meal, ...data.details };
+    } catch {
+        return meal;
+    }
 };
- 
-// --- MAALTIJDFOTO OPHALEN ---
-// Haalt de bestaande URL op uit Supabase, of vraagt backend om te genereren
+
+// --- MAALTIJDFOTO ---
+// Eerst de opgeslagen foto; anders vraagt de backend er één keer één aan.
+const FALLBACKS = [
+    'https://images.pexels.com/photos/1640777/pexels-photo-1640777.jpeg?auto=compress&w=800',
+    'https://images.pexels.com/photos/1279330/pexels-photo-1279330.jpeg?auto=compress&w=800',
+    'https://images.pexels.com/photos/699953/pexels-photo-699953.jpeg?auto=compress&w=800',
+    'https://images.pexels.com/photos/2338407/pexels-photo-2338407.jpeg?auto=compress&w=800',
+    'https://images.pexels.com/photos/1640772/pexels-photo-1640772.jpeg?auto=compress&w=800',
+];
+
 export const generateMealImage = async (
     mealId: string,
     title: string,
-    prompt: string,
+    _prompt?: string,
     existingUrl?: string
 ): Promise<string> => {
-    // Als er al een geldige URL is (niet pollinations), gebruik die
     if (existingUrl && existingUrl.startsWith('http') && !existingUrl.includes('pollinations')) {
         return existingUrl;
     }
- 
-    // Vraag backend om afbeelding te genereren en opslaan
-    try {
-        const res = await fetch(`${API_URL}/generate-image`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                recipe_id: mealId,
-                title: title,
-                prompt: prompt
-            })
-        });
- 
-        if (res.ok) {
-            const data = await res.json();
-            return data.url;
+    if (mealId && !String(mealId).startsWith('tmp_')) {
+        try {
+            const data = await post('/generate-image', { recipe_id: mealId });
+            if (data.url) return data.url;
+        } catch (e) {
+            console.warn('Foto ophalen mislukt, standaardfoto gebruikt:', e);
         }
-    } catch (e) {
-        console.warn('Afbeelding ophalen mislukt, fallback gebruiken:', e);
     }
- 
-    // Fallback: vaste food foto
-    const fallbacks = [
-        'https://images.pexels.com/photos/1640777/pexels-photo-1640777.jpeg?w=800',
-        'https://images.pexels.com/photos/1279330/pexels-photo-1279330.jpeg?w=800',
-        'https://images.pexels.com/photos/699953/pexels-photo-699953.jpeg?w=800',
-        'https://images.pexels.com/photos/2338407/pexels-photo-2338407.jpeg?w=800',
-        'https://images.pexels.com/photos/1640772/pexels-photo-1640772.jpeg?w=800',
-    ];
-    return fallbacks[Math.abs(title.charCodeAt(0)) % fallbacks.length];
+    return FALLBACKS[(title || '').length % FALLBACKS.length];
 };
- 
-// --- KOELKAST SCAN ---
+
+// --- KOELKASTSCAN ---
 export const analyzeFridgeImage = async (base64: string, prefs: any) => {
-    const res = await fetch(`${API_URL}/analyze-fridge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    try {
+        const data = await post('/analyze-fridge', {
             image_data: base64,
-            language: prefs.language || 'nl-NL'
-        })
-    });
- 
-    if (!res.ok) {
+            language: prefs?.language || 'nl-NL',
+            diet: prefs?.diet || [],
+        });
+        return { ...data, suggestions: (data.suggestions || []).map(normalizeMeal) };
+    } catch (e) {
+        console.error('Koelkastscan mislukt:', e);
         return { recognizedItems: [], suggestions: [] };
     }
- 
-    return await res.json();
 };
- 
+
 // --- BOODSCHAPPENLIJST ---
 export const generateShoppingList = async (meals: any[], prefs?: any) => {
-    const res = await fetch(`${API_URL}/generate-shopping-list`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            meals: meals,
+    try {
+        const data = await post('/generate-shopping-list', {
+            meals: meals.map(m => ({ title: m.title, ingredients: m.ingredients || [] })),
             adultsCount: prefs?.adultsCount || 2,
             childrenCount: prefs?.childrenCount || 0,
-            language: prefs?.language || 'nl-NL'
-        })
-    });
- 
-    if (!res.ok) return [];
- 
-    const data = await res.json();
-    return data.items || [];
-};
- 
-// --- MAALTIJD VERVANGEN ---
-export const replaceMeal = async (
-    oldMeal: any,
-    prefs: any,
-    dayIndex: number,
-    favoriteTitles: string[] = []
-) => {
-    const res = await fetch(`${API_URL}/replace-meal`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            meal_id: oldMeal.id,
-            meal_title: oldMeal.title,
-            day_index: dayIndex,
-            user_id: prefs.user_id || 'demo-user',
-            diet: prefs.diet || [],
-            budget: prefs.budget || 'Normaal',
-            language: prefs.language || 'nl-NL',
-            exclude_titles: prefs.generationHistory || [],
-            favorite_titles: favoriteTitles,
-            mode: oldMeal.mode || 'premium'
-        })
-    });
- 
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Vervangen mislukt: ${res.status}`);
+            language: prefs?.language || 'nl-NL',
+        });
+        return data.items || [];
+    } catch (e) {
+        console.error('Boodschappenlijst mislukt:', e);
+        return [];
     }
- 
-    const data = await res.json();
-    return {
-        ...data.meal,
-        id: data.meal.id || `replaced_${Date.now()}`,
-        time: data.meal.estimated_time_minutes || 30,
-        calories: data.meal.calories_per_portion || 500,
-        image_url: data.meal.image_url || null,
-        generated_image_url: data.meal.image_url || null,
-    };
+};
+
+// --- MAALTIJD VERVANGEN ---
+export const replaceMeal = async (oldMeal: any, prefs: any, dayIndex: number, favoriteTitles: string[] = []) => {
+    const data = await post('/replace-meal', {
+        meal_id: oldMeal.id,
+        meal_title: oldMeal.title,
+        day_index: dayIndex,
+        user_id: prefs?.user_id || 'demo-user',
+        diet: prefs?.diet || [],
+        budget: prefs?.budget || 'Normaal',
+        language: prefs?.language || 'nl-NL',
+        exclude_titles: prefs?.generationHistory || [],
+        favorite_titles: favoriteTitles,
+        mode: oldMeal.mode || 'premium',
+    });
+    return normalizeMeal(data.meal);
+};
+
+// --- CHAT MET DE SOUS-CHEF ---
+export const sendChatMessage = async (params: {
+    messages: { sender: string; text: string }[];
+    message: string;
+    userStatus: string;
+    currentView: string;
+    language: string;
+    diet: string[];
+}): Promise<{ reply: string; diet: string[] | null }> => {
+    const data = await post('/chat', {
+        messages: params.messages,
+        message: params.message,
+        user_status: params.userStatus,
+        current_view: params.currentView,
+        language: params.language,
+        diet: params.diet,
+    });
+    return { reply: data.reply || '', diet: data.diet || null };
 };
