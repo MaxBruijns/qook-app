@@ -12,6 +12,7 @@ export interface AccountUser {
   trial_started_at: string | null;
   marketing?: boolean;
   verified?: boolean;
+  billing?: boolean;   // heeft een Stripe-klantaccount (abonnement beheren)
 }
 
 /** Wat iemand al met Qook gedaan heeft (aantallen), voor de proefbanner. */
@@ -275,4 +276,23 @@ export const downloadMyData = async () => {
   a.download = `qook-gegevens-${new Date().toISOString().slice(0, 10)}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
+};
+
+/** Staat betalen via Stripe aan? */
+export const billingEnabled = async () => {
+  try { return !!(await api('/billing/config')).enabled; } catch { return false; }
+};
+
+/** Naar de betaalpagina van Stripe. */
+export const startCheckout = async (tier: string, period: 'month' | 'year') => {
+  const plan = tier === 'basic' ? 'basic_year' : `${tier}_${period}`;
+  const { url } = await api('/billing/checkout', 'POST', { plan });
+  await flush().catch(() => {});
+  window.location.href = url;
+};
+
+/** Stripe-klantportaal: opzeggen, betaalmethode, facturen. */
+export const openBillingPortal = async () => {
+  const { url } = await api('/billing/portal', 'POST', {});
+  window.location.href = url;
 };

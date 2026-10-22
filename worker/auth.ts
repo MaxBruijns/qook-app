@@ -15,6 +15,7 @@
  */
 
 import { mailReady, sendMail as sendMailRaw } from './mail';
+import { billingReady } from './billing';
 import { ensureEngagementSchema, loadStats, recordMilestone, isClientMilestone } from './engagement';
 
 const sendMail = (env: AuthEnv, to: string, subject: string, text: string, opts: { html?: string } = {}) =>
@@ -243,7 +244,7 @@ export function tierOf(u: any): 'visitor' | 'free' | 'basic' | 'trial' | 'premiu
 const publicUser = (u: any) => {
   const tier = tierOf(u);
   return {
-    name: u.name, email: u.email, marketing: !!u.marketing_opt_in, verified: !!u.email_verified,
+    name: u.name, email: u.email, marketing: !!u.marketing_opt_in, verified: !!u.email_verified, billing: !!u.stripe_customer_id,
     subscription: tier === 'trial' ? 'premium' : tier,
     trial_started_at: tier === 'trial' ? u.trial_started_at : null,
   };
@@ -526,6 +527,8 @@ export async function handleAuth(req: Request, env: AuthEnv, path: string): Prom
       // Tijdelijk, tot de betaling (Stripe) er is: de gekozen abonnementsvorm onthouden.
       const tier = String(body.tier || '');
       if (!['free', 'basic', 'premium', 'culinary'].includes(tier)) throw new AuthError(400, 'Onbekend abonnement');
+      // Zodra Stripe aan staat, kan een betaald abonnement alleen nog via de betaalpagina.
+      if (billingReady(env as any) && tier !== 'free') throw new AuthError(402, 'Kies je abonnement via de betaalpagina.');
       await env.DB.prepare('UPDATE users SET subscription = ?, trial_started_at = NULL WHERE id = ?').bind(tier, session.user.id).run();
       return json({ ok: true, subscription: tier }, 200, headers);
     }

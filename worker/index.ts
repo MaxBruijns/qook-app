@@ -27,6 +27,7 @@ import { handleAuth, currentUser, tierOf } from './auth';
 import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
 import { recordMilestone, countReused, runTrialMails, unsubscribe, Milestone } from './engagement';
 import { handleAdmin, reportRecipe, countVisit } from './admin';
+import { handleBilling } from './billing';
 
 interface Env {
   DB: any;            // D1-database (receptenbank)
@@ -45,6 +46,10 @@ interface Env {
   RESEND_API_KEY?: string;
   MAIL_FROM?: string;
   LIMITS?: string;     // 'off' = geen limieten en volledige AI (alleen voor testen)
+  // Stripe (zie worker/billing.ts)
+  STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; STRIPE_PRICE_BASIC_YEAR?: string;
+  STRIPE_PRICE_PREMIUM_MONTH?: string; STRIPE_PRICE_PREMIUM_YEAR?: string;
+  STRIPE_PRICE_CULINARY_MONTH?: string; STRIPE_PRICE_CULINARY_YEAR?: string;
 }
 
 const FULL_ACCESS: Actor = { tier: 'premium', who: 'test' };
@@ -1622,6 +1627,9 @@ export default {
     const path = new URL(request.url).pathname;
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
 
+    const billing = await handleBilling(request, env as any, path,
+      async () => (await currentUser(request, env).catch(() => null))?.user || null);
+    if (billing) return billing;
     const auth = await handleAuth(request, env, path);
     if (auth) return auth;
 

@@ -13,7 +13,7 @@ import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult, Subs
 import { generateWeeklyPlan, generateShoppingList, analyzeFridgeImage, replaceMeal } from './services/geminiService';
 import { useTranslation, detectUserLocale } from './utils/i18n';
 import { recordTaste } from './utils/tasteProfile';
-import { AccountUser, getAccount, getStats, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword, setMarketing, trackMilestone, bumpStat, mailAvailable, emailShoppingList } from './utils/account';
+import { AccountUser, getAccount, getStats, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword, setMarketing, trackMilestone, bumpStat, mailAvailable, emailShoppingList, billingEnabled, startCheckout, openBillingPortal } from './utils/account';
 import { Calendar, Camera, ArrowRight, User, Mail, Lock, ArrowLeft, Globe, ChevronDown, Check, PartyPopper, Loader2, Info } from 'lucide-react';
 
 function getWeekNumber(d: Date) {
@@ -296,6 +296,20 @@ export default function App() {
   const [showTrialEnding, setShowTrialEnding] = useState(false);
   // Kan de lijst gemaild worden? (account + e-mail ingesteld op de server)
   const [canMail, setCanMail] = useState(false);
+  // Betalen via Stripe (zodra het aan staat); terug van de betaalpagina: /app/?betaald=1
+  const [canPay, setCanPay] = useState(false);
+  useEffect(() => { billingEnabled().then(setCanPay); }, []);
+  useEffect(() => {
+    const paid = new URLSearchParams(window.location.search).get('betaald');
+    if (paid === null) return;
+    window.history.replaceState(null, '', '/app/');
+    if (paid === '1') {
+      notify(t.payment_done, 'success');
+      // Stripe meldt de betaling binnen een paar seconden; daarna de app opnieuw laden met het nieuwe abonnement.
+      setTimeout(() => window.location.replace('/app/'), 4000);
+    } else notify(t.payment_cancelled);
+  }, []);
+
   // Terug uit de bevestigingsmail: /app/?verified=1
   useEffect(() => {
     const v = new URLSearchParams(window.location.search).get('verified');
@@ -726,7 +740,7 @@ export default function App() {
             subtitle={preferences ? t.shop_subtitle.replace('{n}', String(selectedMealIds.size)).replace('{p}', String((preferences.adultsCount ?? 2) + (preferences.childrenCount ?? 0))) : undefined}
             onEmail={account && canMail ? async (sections) => { try { const r = await emailShoppingList(sections); notify(t.email_sent.replace('{email}', r.to), 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } } : undefined} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => { if (i.id !== id) return i; if (isPantryItem(i)) rememberPantry(i.name, !i.checked); return { ...i, checked: !i.checked }; }))} language={currentLang} />}
       </main>
-      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onToggleMarketing={async (on) => { try { await setMarketing(on); notify(on ? t.marketing_on : t.marketing_off, 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
+      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onManageBilling={account?.billing && canPay ? () => openBillingPortal().catch(e => notify(e?.message || t.auth_error, 'error')) : undefined} onToggleMarketing={async (on) => { try { await setMarketing(on); notify(on ? t.marketing_on : t.marketing_off, 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
       <ChatAssistant 
         userPrefs={preferences || {} as any} 
         currentPlan={plan} 
@@ -740,9 +754,10 @@ export default function App() {
       />
       <TrialEndingModal isOpen={showTrialEnding} daysLeft={trialDaysLeft} stats={getStats()} language={currentLang}
           onClose={() => setShowTrialEnding(false)} onChoose={() => { setShowTrialEnding(false); setShowPaywall(true); }} />
-      <PaywallModal isOpen={showPaywall} onClose={() => setShowPaywall(false)} onUpgrade={(tier) => { 
+      <PaywallModal isOpen={showPaywall} onClose={() => setShowPaywall(false)} onUpgrade={(tier, period) => { 
           // Een abonnement hoort bij een account: eerst inloggen of registreren.
           if (!account) { setShowPaywall(false); setView('register'); return; }
+          if (canPay) { startCheckout(tier, period).catch(e => notify(e?.message || t.auth_error, 'error')); return; }
           setUserStatus(tier); 
           saveSubscription(tier);
           if (preferences) { 

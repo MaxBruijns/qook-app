@@ -23,6 +23,7 @@ interface Props {
   onLogout?: () => void;
   onDeleteAccount?: (password: string) => void;
   onToggleMarketing?: (on: boolean) => void;
+  onManageBilling?: () => void;
 }
 
 const REGIONS: { val: Region, label: string }[] = [
@@ -131,7 +132,7 @@ const CounterControls = ({ value, onChange }: { value: number, onChange: (v: num
   </div>
 );
 
-export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, onUpdate, onReset, onUnlock, userStatus, onShowPaywall, account, onLogin, onLogout, onDeleteAccount, onToggleMarketing }) => {
+export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, onUpdate, onReset, onUnlock, userStatus, onShowPaywall, account, onLogin, onLogout, onDeleteAccount, onToggleMarketing, onManageBilling }) => {
   const { t } = useTranslation(preferences.language);
   const [localPrefs, setLocalPrefs] = useState<UserPreferences>(preferences);
   const [showWarning, setShowWarning] = useState(false);
@@ -425,6 +426,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                              <input id="settings-marketing" type="checkbox" defaultChecked={!!account.marketing} onChange={e => onToggleMarketing?.(e.target.checked)} className="mt-0.5 w-4 h-4 accent-kooq-sage" />
                              <span>{t.marketing_opt_in}</span>
                          </label>
+                         {onManageBilling && <Button onClick={onManageBilling} variant="secondary" className="w-full py-4">{t.manage_billing}</Button>}
                          <AccountTools account={account} t={t} />
                          <Button onClick={onLogout} variant="secondary" className="w-full py-4">{t.logout}</Button>
                          <button onClick={() => { const pw = prompt(t.delete_account_confirm); if (pw) onDeleteAccount?.(pw); }} className="w-full text-center text-[11px] text-red-500 hover:text-red-600 underline underline-offset-4">{t.delete_account}</button>
