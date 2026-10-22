@@ -1,20 +1,39 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# KOOQ — jouw persoonlijke sous-chef
 
-# Run and deploy your AI Studio app
+Alles draait op **Cloudflare**, in één Worker:
 
-This contains everything you need to run your app locally.
+| Onderdeel | Cloudflare-dienst |
+|---|---|
+| Website (React/Vite) | Worker static assets (map `dist`) |
+| Backend (`/api/...`) | Worker (`worker/index.ts`) |
+| Receptenbank | D1-database `kooq-db` |
+| Maaltijdfoto's | R2-bucket `kooq-photos` |
+| Foto's maken | Workers AI (FLUX schnell) |
+| Tekst (menu's, recepten, chat, koelkastscan) | Google Gemini (sleutel `GEMINI_API_KEY`) |
 
-View your app in AI Studio: https://ai.studio/apps/drive/1Kqg4uJ2cLP6L_edqWGjP8MkSEAVT6Df0
+## Online zetten (eenmalig)
 
-## Run Locally
+1. Cloudflare-dashboard → **Workers & Pages** → **Create** → **Import a repository** → kies `qook-app`.
+2. Build-instellingen:
+   - Build command: `npm run build`
+   - Deploy command: `npx wrangler@4 deploy`
+3. Na de eerste deploy: Worker → **Settings → Variables and Secrets** → **Add** →
+   type *Secret*, naam `GEMINI_API_KEY`, waarde = je sleutel uit Google AI Studio.
+4. Controleer `https://<jouw-worker>.workers.dev/api/health`.
 
-**Prerequisites:**  Node.js
+De database en de fotobucket worden bij de eerste deploy automatisch aangemaakt. Lukt dat niet, maak ze dan zelf aan
+met precies deze namen: D1-database `kooq-db` en R2-bucket `kooq-photos`. Deploy daarna opnieuw.
 
+Elke push naar `main` zet automatisch een nieuwe versie online.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Lokaal ontwikkelen
+
+```bash
+npm install
+npx wrangler@4 dev          # backend op poort 8787 (zet GEMINI_API_KEY in .dev.vars)
+npm run dev                 # website op poort 3000, /api gaat naar de backend
+```
+
+## Optioneel
+
+- `TEXT_MODEL` (variabele): ander Gemini-model, standaard `gemini-2.5-flash`.
