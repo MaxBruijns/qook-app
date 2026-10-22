@@ -5,6 +5,7 @@
  *    receptenbank (vrijwel geen AI-kosten). Alleen als de bank echt niets passends heeft, maakt de AI
  *    iets — met een daglimiet.
  *  - Premium en Culinair: de AI stemt het menu af op het smaakprofiel en vult aan waar nodig.
+ *  - Weekmenu: iedereen 1x per week automatisch; Premium/Culinair/proef 1x per week extra (plus speling).
  *  - Per actie een limiet per dag of week. De app laat dezelfde grenzen netjes zien; dit is het vangnet.
  */
 
@@ -22,14 +23,14 @@ const LIMITS: Record<Tier, Record<Action, [number, Period]>> = {
   visitor:  { plan: [3, 'day'],  replace: [5, 'week'],  scan: [1, 'week'], chat: [5, 'day'],   fallback: [2, 'day'] },
   free:     { plan: [2, 'week'], replace: [3, 'week'],  scan: [1, 'week'], chat: [5, 'day'],   fallback: [2, 'day'] },
   basic:    { plan: [2, 'week'], replace: [3, 'week'],  scan: [1, 'week'], chat: [10, 'day'],  fallback: [3, 'day'] },
-  trial:    { plan: [2, 'day'],  replace: [40, 'day'],  scan: [1, 'week'], chat: [10, 'day'],  fallback: [3, 'day'] },
-  premium:  { plan: [2, 'day'],  replace: [60, 'day'],  scan: [20, 'day'], chat: [50, 'day'],  fallback: [20, 'day'] },
-  culinary: { plan: [2, 'day'],  replace: [60, 'day'],  scan: [20, 'day'], chat: [100, 'day'], fallback: [20, 'day'] },
+  trial:    { plan: [3, 'week'], replace: [40, 'day'],  scan: [1, 'week'], chat: [10, 'day'],  fallback: [3, 'day'] },
+  premium:  { plan: [3, 'week'], replace: [60, 'day'],  scan: [20, 'day'], chat: [50, 'day'],  fallback: [20, 'day'] },
+  culinary: { plan: [3, 'week'], replace: [60, 'day'],  scan: [20, 'day'], chat: [100, 'day'], fallback: [20, 'day'] },
 };
 
 const MESSAGES: Record<Action, string> = {
-  plan: 'Je hebt voor nu al een nieuw weekmenu gemaakt. Met Basic krijg je elke week automatisch een nieuw menu; '
-    + 'met Premium kun je elke dag zelf een nieuw menu maken.',
+  plan: 'Je krijgt elke week automatisch een nieuw weekmenu. Met Premium kun je daarnaast 1x per week zelf een nieuw '
+    + 'menu laten maken; losse gerechten vervangen kan altijd.',
   replace: 'Je hebt je vervangingen voor deze week gebruikt. Met Premium vervang je onbeperkt.',
   scan: 'Je hebt je koelkastscan voor deze week gebruikt. Met Premium scan je onbeperkt.',
   chat: 'Je hebt vandaag al veel met de sous-chef gepraat. Morgen kan het weer.',

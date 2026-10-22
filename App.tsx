@@ -200,16 +200,10 @@ export default function App() {
       const currentWeek = getWeekNumber(new Date());
       if (savedUsage) {
           let parsed: Usage = JSON.parse(savedUsage);
-          const lastReset = parsed.lastRegenerationReset ? new Date(parsed.lastRegenerationReset) : null;
           const now = new Date();
-          const isNewDay = lastReset ? (now.getTime() - lastReset.getTime() > 24 * 60 * 60 * 1000) : true;
-
+          // Alles telt per week: vervangingen, scans en het ene extra weekmenu (Premium/Culinair/proef).
           if (parsed.week === currentWeek) {
-              setUsage({ 
-                  ...parsed, 
-                  fullRegenerations: isNewDay ? 0 : (parsed.fullRegenerations || 0),
-                  lastRegenerationReset: isNewDay ? now.toISOString() : parsed.lastRegenerationReset
-              });
+              setUsage({ ...parsed, fullRegenerations: parsed.fullRegenerations || 0 });
           } else {
               setUsage({ replacements: 0, scans: 0, fullRegenerations: 0, week: currentWeek, lastRegenerationReset: now.toISOString() });
           }
@@ -274,8 +268,8 @@ export default function App() {
     }
   }, [usage]);
 
-  // Rechten: zelf een nieuw weekmenu maken kan alleen met Premium/Culinair (ook in de proefperiode), 1x per dag.
-  // Gratis en Basic krijgen elke week automatisch een nieuw menu. Het eerste menu (onboarding) mag altijd.
+  // Rechten: iedereen krijgt elke week automatisch een nieuw weekmenu. Premium/Culinair (ook in de proef)
+  // mogen daarnaast 1x per week zelf een nieuw menu laten maken. Het eerste menu (onboarding) mag altijd.
   const isPremiumLike = userStatus === 'premium' || userStatus === 'culinary';
   const canRegenerateNow = () => !plan || (isPremiumLike && usage.fullRegenerations < 1);
 
@@ -297,9 +291,10 @@ export default function App() {
   const triggerRegeneration = async (prefsOverride?: UserPreferences, isAuto = false, force = false) => {
     const activePrefs = prefsOverride || preferences;
     if (!activePrefs) return;
+    const countsAsExtra = !isAuto && !force && !!plan;   // eerste menu en upgrade tellen niet mee
 
     if (!isAuto && !force && !canRegenerateNow()) {
-        if (isPremiumLike) alert(t.limit_reached_alert || "Je hebt vandaag al een nieuw weekmenu gemaakt.");
+        if (isPremiumLike) alert(t.limit_reached_alert);
         else setShowPaywall(true);
         return;
     }
@@ -330,12 +325,7 @@ export default function App() {
         localStorage.setItem('qook_prefs', JSON.stringify(updatedPrefs));
 
         if (!isAuto) {
-            setUsage(u => ({ 
-                ...u, 
-                fullRegenerations: u.fullRegenerations + 1,
-                replacements: 0, 
-                scans: 0 
-            }));
+            if (countsAsExtra) setUsage(u => ({ ...u, fullRegenerations: u.fullRegenerations + 1 }));
             setView('dashboard');
         } else {
             setIsAutoRefreshing(false);
