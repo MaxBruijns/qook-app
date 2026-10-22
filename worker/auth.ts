@@ -31,7 +31,7 @@ const TRIAL_DAYS = 14;
 
 /** Gegevens die de app per account bewaart (dezelfde namen als in de browser). */
 export const SYNC_KEYS = ['qook_prefs', 'qook_current_plan', 'qook_favorites', 'qook_favorite_meals', 'qook_usage',
-  'qook_taste', 'qook_meal_history'];
+  'qook_taste', 'qook_meal_history', 'qook_pantry_have', 'qook_shop_order'];
 const MAX_VALUE_BYTES = 300_000;
 
 class AuthError extends Error {

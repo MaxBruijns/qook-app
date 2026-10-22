@@ -24,6 +24,9 @@ interface Props {
   onComplete: (prefs: UserPreferences) => void;
 }
 
+/** Budget bepaalt de standaard zero-waste (aan te passen in Instellingen). */
+export const BUDGET_ZERO_WASTE: Record<string, number> = { Laag: 80, Normaal: 65, Luxe: 50 };
+
 const STEPS = ['people', 'cooking_times', 'budget', 'week_profile', 'profiles'];
 
 export const Onboarding: React.FC<Props> = ({ onComplete }) => {
@@ -45,7 +48,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
       caloriePreference: 'medium',
       hasOnboarded: false,
       subscriptionStatus: 'free',
-      zeroWasteLevel: 50,
+      zeroWasteLevel: 65,
       partyGuests: 0,
       dayModes: {
         0: 'premium', 1: 'premium', 2: 'premium', 3: 'premium', 
@@ -216,7 +219,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
                     {(['Laag', 'Normaal', 'Luxe'] as Budget[]).map(b => (
                         <button
                             key={b}
-                            onClick={() => setPrefs({...prefs, budget: b})}
+                            onClick={() => setPrefs({...prefs, budget: b, zeroWasteLevel: BUDGET_ZERO_WASTE[b] ?? 65})}
                             className={`p-5 rounded-2xl flex flex-col items-center justify-center text-center transition-all border-2 relative ${
                                 prefs.budget === b
                                 ? 'bg-kooq-sage text-white shadow-md border-kooq-sage scale-[1.02]'

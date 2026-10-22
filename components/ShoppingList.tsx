@@ -1,7 +1,7 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { ShoppingItem } from '../types';
-import { X, Check, MessageSquare } from 'lucide-react';
+import { X, Check, MessageSquare, ChevronUp, ChevronDown, ArrowUpDown } from 'lucide-react';
 import { Button } from './Shared';
 import { useTranslation } from '../utils/i18n';
 
@@ -11,6 +11,17 @@ interface Props {
   onToggleItem: (id: string) => void;
   language: string;
 }
+
+// Volgorde van de afdelingen in jouw eigen supermarkt (onthouden op dit apparaat).
+const ORDER_KEY = 'qook_shop_order';
+const loadOrder = (): string[] => { try { return JSON.parse(localStorage.getItem(ORDER_KEY) || '[]'); } catch { return []; } };
+const saveOrder = (order: string[]) => { try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch {} };
+
+/** Afdelingen in de eigen volgorde; nieuwe afdelingen behouden de standaardvolgorde (looproute). */
+const sortCategories = (cats: string[], order: string[]) => {
+  const pos = (c: string) => { const i = order.indexOf(c); return i < 0 ? order.length + cats.indexOf(c) : i; };
+  return [...cats].sort((a, b) => pos(a) - pos(b));
+};
 
 /** 1.5 -> "1,5"; 0 (zout, peper, naar smaak) -> niets. */
 const formatAmount = (item: ShoppingItem, language: string) => {
@@ -22,10 +33,25 @@ const formatAmount = (item: ShoppingItem, language: string) => {
 export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, language }) => {
   const { t } = useTranslation(language);
   const grouped = items.reduce((acc, item) => { if (!acc[item.category]) acc[item.category] = []; acc[item.category].push(item); return acc; }, {} as Record<string, ShoppingItem[]>);
+  const [order, setOrder] = useState<string[]>(loadOrder);
+  const [editOrder, setEditOrder] = useState(false);
+  const categories = sortCategories(Object.keys(grouped), order);
+
+  // Afdeling een plek omhoog of omlaag; de hele volgorde wordt onthouden (ook afdelingen die nu niet op de lijst staan).
+  const move = (cat: string, dir: -1 | 1) => {
+    const i = categories.indexOf(cat), j = i + dir;
+    if (j < 0 || j >= categories.length) return;
+    const visible = [...categories];
+    [visible[i], visible[j]] = [visible[j], visible[i]];
+    const rest = order.filter(c => !visible.includes(c));
+    const next = [...visible, ...rest];
+    setOrder(next);
+    saveOrder(next);
+  };
 
   const handleShare = () => {
       let text = `🛒 *Qook Boodschappenlijst*\n\n`;
-      (Object.entries(grouped) as [string, ShoppingItem[]][]).forEach(([cat, items]) => {
+      categories.map(cat => [cat, grouped[cat]] as [string, ShoppingItem[]]).forEach(([cat, items]) => {
           text += `*${cat}*\n`;
           items.forEach(i => { const a = formatAmount(i, language); text += `${i.checked ? '✅' : '☐'} ${i.name}${a ? ` (${a})` : ''}\n`; });
           text += `\n`;
@@ -42,9 +68,20 @@ export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, la
       <div className="flex-1 overflow-y-auto p-4 max-w-2xl mx-auto w-full">
          {items.length === 0 ? <div className="text-center py-20 text-kooq-slate">{t.empty_list}</div> : (
              <div className="space-y-6">
-                 {Object.keys(grouped).map(cat => (
+                 <button onClick={() => setEditOrder(e => !e)} className="flex items-center gap-2 text-xs font-bold text-kooq-slate hover:text-kooq-dark">
+                     <ArrowUpDown size={14} /> {editOrder ? t.shop_order_done : t.shop_order_edit}
+                 </button>
+                 {categories.map((cat, ci) => (
                      <div key={cat}>
-                         <h3 className="text-sm font-bold text-kooq-sage uppercase tracking-wider mb-2 sticky top-0 bg-white py-2 z-10">{cat}</h3>
+                         <div className="flex items-center justify-between sticky top-0 bg-white py-2 z-10 mb-2">
+                             <h3 className="text-sm font-bold text-kooq-sage uppercase tracking-wider">{cat}</h3>
+                             {editOrder && (
+                                 <div className="flex gap-1">
+                                     <button aria-label="omhoog" disabled={ci === 0} onClick={() => move(cat, -1)} className="p-2 rounded-lg bg-kooq-white disabled:opacity-30"><ChevronUp size={16} /></button>
+                                     <button aria-label="omlaag" disabled={ci === categories.length - 1} onClick={() => move(cat, 1)} className="p-2 rounded-lg bg-kooq-white disabled:opacity-30"><ChevronDown size={16} /></button>
+                                 </div>
+                             )}
+                         </div>
                          <div className="space-y-2">
                              {grouped[cat].map(item => (
                                  <div key={item.id} onClick={() => onToggleItem(item.id)} className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${item.checked ? 'bg-kooq-white border-transparent opacity-50' : 'bg-white border-kooq-slate/10'}`}>

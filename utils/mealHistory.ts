@@ -26,7 +26,7 @@ const load = (): HistoryEntry[] => {
     // Eenmalige overstap: oude titels zonder datum behandelen als twee weken geleden.
     const prefs = JSON.parse(localStorage.getItem('qook_prefs') || '{}');
     const old: string[] = Array.isArray(prefs.generationHistory) ? prefs.generationHistory : [];
-    const date = new Date(Date.now() - 2 * WEEK_MS).toISOString();
+    const date = new Date(Date.now() - 2 * WEEK_MS - 60_000).toISOString(); // (+1 min: telt altijd als 2 weken)
     return old.map(title => ({ title, date }));
   } catch {
     return [];
