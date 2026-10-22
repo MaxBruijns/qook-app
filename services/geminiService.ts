@@ -104,7 +104,8 @@ export const generateWeeklyPlan = async (prefs: UserPreferences, favoriteTitles:
 // --- GERECHT VERVANGEN ----------------------------------------------------
 export const replaceMeal = async (currentMeal: Meal, prefs: UserPreferences, dayIndex: number, favoriteTitles: string[] = []): Promise<Meal> => {
   const data = await post('/replace-meal', {
-    currentMeal: { id: currentMeal.id, title: currentMeal.title },
+    currentMeal: { id: currentMeal.id, title: currentMeal.title,
+                   main_ingredient: (currentMeal as any).main_ingredient, cuisine: (currentMeal as any).cuisine },
     prefs: { ...prefs, tasteProfile: getTasteProfile() }, dayIndex, favoriteTitles,
     history: getRecentHistory(), dislikedTitles: dislikedTitles(),
   });
@@ -186,6 +187,7 @@ export const generateShoppingList = async (meals: Meal[], prefs: UserPreferences
     meals: meals.map(m => ({ id: m.id, title: m.title })),
     servings: servingsOf(prefs),
     language: prefs?.language || 'nl-NL',
+    region: prefs?.region || 'NL',
   });
 };
 

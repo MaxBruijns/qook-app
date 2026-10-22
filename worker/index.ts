@@ -5,13 +5,21 @@
  *  - /api/*  : de backend. Volgt de AI-logica van het oorspronkelijke
  *              AI Studio-ontwerp (9 januari), maar dan veilig op de server.
  *  - Tekst   : Google Gemini via GEMINI_API_KEY.
- *  - Foto's  : Workers AI (FLUX schnell), één keer per gerecht, bewaard in R2.
+ *  - Foto's  : Workers AI (FLUX schnell), één keer per gerecht, bewaard in R2 (als webp).
  *  - Data    : D1-database met de receptenbank.
+ *
+ * Receptenbank:
+ *  - Elke 20 minuten vult een geplande taak (cron) de bank aan: nieuwe gerechten per
+ *    categorie, volledige recepten en foto's. Zo hoeft de AI bij een verzoek bijna niets
+ *    meer te maken.
+ *  - Een weekmenu wordt eerst uit de bank samengesteld; de AI maakt alleen wat ontbreekt.
  *
  * Instellingen (Cloudflare → Worker → Settings → Variables and Secrets):
  *  - GEMINI_API_KEY (secret, verplicht)
  *  - TEXT_MODEL     (optioneel, standaard gemini-3.5-flash-lite) — weekmenu, vervangen, chat
  *  - RECIPE_MODEL   (optioneel, standaard gemini-3.8-flash) — volledige recepten (1x per gerecht)
+ *  - ADMIN_KEY      (optioneel, secret) — maakt POST /api/admin/seed mogelijk (handmatig aanvullen)
+ *  - SEED_DETAILS_PER_RUN / SEED_IMAGES_PER_RUN (optioneel) — hoeveel per cron-ronde
  */
 
 interface Env {
@@ -19,10 +27,16 @@ interface Env {
   PHOTOS: any;        // R2-bucket (maaltijdfoto's)
   AI: any;            // Workers AI
   ASSETS: any;        // De gebouwde website
+  IMAGES?: any;       // Cloudflare Images (verkleinen naar webp)
   GEMINI_API_KEY: string;
   TEXT_MODEL?: string;
   RECIPE_MODEL?: string;
+  ADMIN_KEY?: string;
+  SEED_DETAILS_PER_RUN?: string;
+  SEED_IMAGES_PER_RUN?: string;
 }
+
+type Ctx = { waitUntil(p: Promise<any>): void } | undefined;
 
 const IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';
 /** Volledige recepten worden voor dit aantal personen bewaard; de app rekent om. */
@@ -38,11 +52,11 @@ const json = (data: unknown, status = 200) =>
   });
 
 class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string, public retry = false) { super(message); }
 }
 
 const LANGS: Record<string, string> = { nl: 'Nederlands', en: 'Engels', de: 'Duits', fr: 'Frans', es: 'Spaans' };
-const langName = (code = 'nl') => LANGS[code.toLowerCase().slice(0, 2)] || 'Engels';
+const langName = (code = 'nl') => LANGS[String(code).toLowerCase().slice(0, 2)] || 'Engels';
 
 const parseJson = (text: string) => {
   let t = (text || '').trim();
@@ -51,15 +65,23 @@ const parseJson = (text: string) => {
 };
 
 const list = (a: any) => (Array.isArray(a) ? a : []);
+const errMsg = (e: any) => String(e?.message || e).slice(0, 200);
+
+/** Werk dat na het antwoord doorloopt (alleen als Cloudflare een context meegeeft). */
+const background = (ctx: Ctx, p: () => Promise<any>) => {
+  if (ctx?.waitUntil) ctx.waitUntil(p().catch(e => console.warn('Achtergrondtaak mislukt:', errMsg(e))));
+};
 
 // ---------------------------------------------------------------------------
-// Gemini
+// Gemini (met tijdslimiet en één herhaalpoging)
 // ---------------------------------------------------------------------------
 const DEFAULT_TEXT_MODEL = 'gemini-3.5-flash-lite';
 const DEFAULT_RECIPE_MODEL = 'gemini-3.8-flash';
 
+interface AiOpts { timeoutMs?: number; retries?: number }
+
 async function aiJson(env: Env, system: string, prompt: string, temperature = 0.8, imageB64?: string,
-                      modelOverride?: string): Promise<any> {
+                      modelOverride?: string, opts: AiOpts = {}): Promise<any> {
   if (!env.GEMINI_API_KEY) throw new ApiError(500, 'GEMINI_API_KEY ontbreekt in de Worker-instellingen');
   const model = modelOverride || env.TEXT_MODEL || DEFAULT_TEXT_MODEL;
   const parts: any[] = [];
@@ -68,20 +90,44 @@ async function aiJson(env: Env, system: string, prompt: string, temperature = 0.
 
   const generationConfig: any = { responseMimeType: 'application/json', temperature };
   if (model.startsWith('gemini-2.5-flash')) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: 'user', parts }],
+    generationConfig,
+  });
 
+  const timeoutMs = opts.timeoutMs ?? 40000;
+  const retries = opts.retries ?? 1;
+  let lastErr: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await aiOnce(env, model, body, timeoutMs);
+    } catch (e: any) {
+      lastErr = e;
+      const retryable = !(e instanceof ApiError) || e.retry;
+      if (!retryable || attempt === retries) break;
+      console.warn(`AI-poging ${attempt + 1} mislukt (${errMsg(e)}), nog een keer`);
+    }
+  }
+  if (lastErr instanceof ApiError) throw lastErr;
+  if (lastErr?.name === 'TimeoutError' || lastErr?.name === 'AbortError') {
+    throw new ApiError(504, 'De AI reageerde te traag. Probeer het nog eens.');
+  }
+  console.error('AI niet bereikbaar', errMsg(lastErr));
+  throw new ApiError(502, 'AI-fout');
+}
+
+async function aiOnce(env: Env, model: string, body: string, timeoutMs: number) {
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts }],
-      generationConfig,
-    }),
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
     console.error('Gemini-fout', res.status, (await res.text()).slice(0, 500));
-    throw new ApiError(res.status === 429 ? 429 : 502,
-      res.status === 429 ? 'De AI is even druk (daglimiet bereikt). Probeer het later opnieuw.' : 'AI-fout');
+    if (res.status === 429) throw new ApiError(429, 'De AI is even druk (daglimiet bereikt). Probeer het later opnieuw.');
+    throw new ApiError(502, 'AI-fout', res.status >= 500);
   }
   const data: any = await res.json();
   const text = (data.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || '').join('');
@@ -89,41 +135,257 @@ async function aiJson(env: Env, system: string, prompt: string, temperature = 0.
     return parseJson(text);
   } catch {
     console.error('Geen geldige JSON van Gemini:', text.slice(0, 500));
-    throw new ApiError(502, 'AI gaf een onleesbaar antwoord, probeer opnieuw');
+    throw new ApiError(502, 'AI gaf een onleesbaar antwoord, probeer opnieuw', true);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Vaste lijsten: hoofdingrediënt, keuken, dieet
+// (Vaste waarden maken de variatieregels betrouwbaar: geen "hert = rundvlees" meer.)
+// ---------------------------------------------------------------------------
+const normTitle = (t: any) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+const normWord = (w: any) => normTitle(w).split(' ')[0] || '';
+
+const MAINS = ['kip', 'kalkoen', 'eend', 'rundvlees', 'varkensvlees', 'gehakt', 'lamsvlees', 'wild', 'zalm', 'witvis',
+  'tonijn', 'vis', 'zeevruchten', 'peulvruchten', 'tofu', 'ei', 'kaas', 'paddenstoelen', 'groenten', 'aardappel', 'pasta', 'rijst'];
+
+/** Volgorde is belangrijk: specifiek vóór algemeen. Getest op genormaliseerde tekst (kleine letters, geen accenten). */
+const MAIN_SYNONYMS: [RegExp, string][] = [
+  [/gehakt|burger|kofta|kefta|bal(len|letjes)\b/, 'gehakt'],
+  [/kalkoen/, 'kalkoen'],
+  [/\beend|eendenborst/, 'eend'],
+  [/kip|hoen|poulet|chicken/, 'kip'],
+  [/garnal|gamba|scampi|kreeft|krab|mossel|oester|coquille|jakobsschelp|inktvis|calamar|octopus|zeevrucht|schaaldier|schelpdier/, 'zeevruchten'],
+  [/zalm/, 'zalm'],
+  [/tonijn/, 'tonijn'],
+  [/kabeljauw|zeebaars|\bschol|tilapia|pangasius|\bheek\b|koolvis|zeeduivel|dorade|zeebrasem|witvis|wijting|schelvis|snoekbaars|\btong\b|tarbot|griet|poon|hake|\bcod\b/, 'witvis'],
+  [/makreel|haring|forel|sardine|sardien|ansjovis|paling|\bvis\b|fish/, 'vis'],
+  [/\bhert|\bree\b|reebout|reerug|everzwijn|fazant|parelhoen|konijn|\bhazen|\bhaas\b|\bwild\b|venison/, 'wild'],
+  [/\blam\b|lams|lamb/, 'lamsvlees'],
+  [/rund|biefstuk|ossenhaas|entrecote|ribeye|rib eye|steak|sukade|kalf|beef|tournedos|ossenstaart|stoofvlees|riblap/, 'rundvlees'],
+  [/varken|\bspek|\bham\b|worst|chorizo|pancetta|speklap|karbonade|saucijs|pork|procureur|hamlap|spareribs|varkenshaas|schnitzel|prosciutto/, 'varkensvlees'],
+  [/bonen|\bboon|kikkererwt|linze|\berwt|peulvrucht|edamame|falafel|dahl|dal\b|lentil|chickpea|bean/, 'peulvruchten'],
+  [/tofu|tempeh|seitan/, 'tofu'],
+  [/^eieren$|^ei$|\beieren\b|\bei\b|\begg|omelet|frittata|shakshuka/, 'ei'],
+  [/kaas|halloumi|feta|mozzarella|ricotta|paneer|burrata|parmezaan|brie|camembert|gorgonzola|cheese/, 'kaas'],
+  [/paddenstoel|champignon|shiitake|oesterzwam|truffel|mushroom/, 'paddenstoelen'],
+  [/zoete aardappel|bataat|groente|bloemkool|broccoli|pompoen|aubergine|courgette|spinazie|\bkool\b|wortel|prei|paprika|tomaat|venkel|biet|asperge|vegetable/, 'groenten'],
+  [/aardappel|krieler|potato/, 'aardappel'],
+  [/pasta|spaghetti|penne|noedel|noodle|gnocchi|lasagne|tagliatelle|macaroni|\bmie\b|ravioli|orzo/, 'pasta'],
+  [/rijst|risotto|couscous|quinoa|bulgur|rice/, 'rijst'],
+];
+
+function canonMain(v: any): string {
+  const n = normTitle(v);
+  if (!n) return '';
+  if (MAINS.includes(n)) return n;
+  for (const [re, main] of MAIN_SYNONYMS) if (re.test(n)) return main;
+  return n.split(' ')[0].slice(0, 20);
+}
+
+const CUISINES = ['Hollands', 'Belgisch', 'Frans', 'Italiaans', 'Spaans', 'Portugees', 'Grieks', 'Mediterraan', 'Brits',
+  'Duits', 'Scandinavisch', 'Oost-Europees', 'Midden-Oosters', 'Marokkaans', 'Afrikaans', 'Indiaas', 'Chinees', 'Japans',
+  'Koreaans', 'Thais', 'Vietnamees', 'Indonesisch', 'Mexicaans', 'Latijns-Amerikaans', 'Amerikaans', 'Fusion'];
+
+const CUISINE_SYNONYMS: [RegExp, string][] = [
+  [/nederlands|dutch|oudhollands/, 'Hollands'],
+  [/vlaams/, 'Belgisch'],
+  [/turks|libanees|perzisch|iraans|israelisch|arabisch|syrisch|levant/, 'Midden-Oosters'],
+  [/noord afrikaans|tunesisch|algerijns/, 'Marokkaans'],
+  [/ethiopisch|west afrikaans|zuid afrikaans|senegalees/, 'Afrikaans'],
+  [/surinaams|caribisch|peruaans|braziliaans|argentijns|cubaans|colombiaans|latin/, 'Latijns-Amerikaans'],
+  [/tex mex|mexican/, 'Mexicaans'],
+  [/zweeds|noors|deens|fins|nordic/, 'Scandinavisch'],
+  [/pools|hongaars|russisch|oekraiens|tsjechisch/, 'Oost-Europees'],
+  [/engels|iers|schots|british/, 'Brits'],
+  [/oostenrijks|zwitsers|german/, 'Duits'],
+  [/bbq|american|cajun|southern/, 'Amerikaans'],
+  [/italian/, 'Italiaans'], [/french/, 'Frans'], [/spanish/, 'Spaans'], [/greek/, 'Grieks'],
+  [/indian|pakistaans|sri lankaans/, 'Indiaas'], [/chinese|kantonees|sichuan/, 'Chinees'], [/japanese/, 'Japans'],
+  [/korean/, 'Koreaans'], [/thai/, 'Thais'], [/vietnamese/, 'Vietnamees'], [/maleis|indonesian/, 'Indonesisch'],
+  [/mediterranean/, 'Mediterraan'], [/fusion|modern|internationaal/, 'Fusion'],
+];
+
+function canonCuisine(v: any): string {
+  const n = normTitle(v);
+  if (!n) return '';
+  for (const c of CUISINES) if (normTitle(c) === n) return c;
+  for (const [re, c] of CUISINE_SYNONYMS) if (re.test(n)) return c;
+  for (const c of CUISINES) if (n.includes(normTitle(c))) return c;
+  const s = String(v).trim().slice(0, 30);
+  return s[0].toUpperCase() + s.slice(1);
+}
+
+/** De keukenprofielen uit de onboarding, vertaald naar keukens uit de vaste lijst. */
+const KITCHEN_CUISINES: Record<string, string[]> = {
+  'Klassiek Europees': ['Frans', 'Italiaans', 'Spaans', 'Brits', 'Duits', 'Belgisch'],
+  'Mediterrane & Midden-Oosters': ['Grieks', 'Mediterraan', 'Spaans', 'Italiaans', 'Midden-Oosters', 'Marokkaans', 'Portugees'],
+  'Aziatisch – Chinees': ['Chinees'],
+  'Aziatisch – Japans': ['Japans', 'Koreaans'],
+  'Aziatisch – Zuid/Oost': ['Thais', 'Vietnamees', 'Indonesisch', 'Indiaas'],
+  'Latijns-Amerikaans': ['Mexicaans', 'Latijns-Amerikaans'],
+  'Noord-Amerikaans & BBQ': ['Amerikaans'],
+  'Noord- & West-Europees': ['Hollands', 'Belgisch', 'Brits', 'Duits', 'Scandinavisch', 'Frans'],
+  'Afrikaans': ['Afrikaans', 'Marokkaans'],
+  'Fusion & Modern': ['Fusion'],
+  'Italiaans': ['Italiaans'],
+};
+const preferredCuisines = (profiles: any) =>
+  new Set(list(profiles).flatMap((p: string) => KITCHEN_CUISINES[p] || [canonCuisine(p)]).map(normWord));
+
+const DIET_TAGS = ['vegetarisch', 'vegan', 'pescotarisch', 'glutenvrij', 'lactosevrij', 'notenvrij', 'halal', 'lowcarb'];
+const DIET_TAG_SYNONYMS: Record<string, string> = {
+  veganistisch: 'vegan', vegetarian: 'vegetarisch', vega: 'vegetarisch', pescatarisch: 'pescotarisch',
+  pescetarisch: 'pescotarisch', glutenarm: 'glutenvrij', glutenfree: 'glutenvrij', lactosearm: 'lactosevrij',
+  zuivelvrij: 'lactosevrij', notenallergie: 'notenvrij', koolhydraatarm: 'lowcarb', keto: 'lowcarb',
+};
+
+function canonDietTags(a: any): string[] {
+  const tags = new Set<string>();
+  for (const t of list(a)) {
+    const n = normTitle(t).replace(/ /g, '');
+    const tag = DIET_TAGS.includes(n) ? n : DIET_TAG_SYNONYMS[n];
+    if (tag) tags.add(tag);
+  }
+  if (tags.has('vegan')) tags.add('vegetarisch');
+  if (tags.has('vegetarisch')) tags.add('pescotarisch');
+  return DIET_TAGS.filter(t => tags.has(t));
+}
+
+/** Dieet van de gebruiker → labels voor de receptenbank. Onbekende diëten (Keto, Paleo, "Anders"): bank niet gebruiken. */
+const USER_DIET_TAGS: Record<string, string> = {
+  Vegetarisch: 'vegetarisch', Vegan: 'vegan', Pescotarisch: 'pescotarisch', Halal: 'halal', Glutenarm: 'glutenvrij',
+  Lactosevrij: 'lactosevrij', Notenvrij: 'notenvrij', 'Low-carb': 'lowcarb',
+};
+function userDiet(prefs: any): { ok: boolean; tags: string[] } {
+  const tags: string[] = [];
+  for (const d of list(prefs.diet)) {
+    if (!d || d === 'Geen') continue;
+    const tag = USER_DIET_TAGS[d];
+    if (!tag) return { ok: false, tags: [] };
+    tags.push(tag);
+  }
+  if (prefs.customDiet && String(prefs.customDiet).trim()) return { ok: false, tags: [] };
+  return { ok: true, tags };
+}
+
+/** Dieetkeuzes zoals de instellingen ze kennen (de chat gaf soms "vegetarisch" met kleine letter). */
+const DIET_OPTIONS = ['Vegetarisch', 'Vegan', 'Pescotarisch', 'Halal', 'Glutenarm', 'Lactosevrij', 'Keto', 'Paleo', 'Notenvrij', 'Low-carb'];
+const DIET_OPTION_SYNONYMS: Record<string, string> = {
+  veganistisch: 'Vegan', vegetarian: 'Vegetarisch', vega: 'Vegetarisch', pescatarisch: 'Pescotarisch', pescetarisch: 'Pescotarisch',
+  glutenvrij: 'Glutenarm', glutenfree: 'Glutenarm', lactosearm: 'Lactosevrij', zuivelvrij: 'Lactosevrij',
+  koolhydraatarm: 'Low-carb', notenallergie: 'Notenvrij',
+};
+function canonDietList(a: any): string[] {
+  const out: string[] = [];
+  for (const d of list(a)) {
+    const n = normTitle(d).replace(/ /g, '');
+    if (!n || n === 'geen' || n === 'none') continue;
+    const hit = DIET_OPTIONS.find(o => normTitle(o).replace(/ /g, '') === n) || DIET_OPTION_SYNONYMS[n];
+    const s = String(d).trim();
+    out.push(hit || s[0].toUpperCase() + s.slice(1));
+  }
+  return out.length ? [...new Set(out)] : ['Geen'];
+}
+
+/** "Kip Tikka Masala Met Naan" → "Kip tikka masala met naan". Korte namen (Beef Wellington) blijven staan. */
+function cleanTitle(t: any): string {
+  let s = String(t || '').replace(/\s+/g, ' ').trim().replace(/^["'“]+|["'”]+$/g, '').trim();
+  if (!s) return '';
+  const words = s.split(' ');
+  const isCap = (w: string) => /^[A-ZÀ-Þ][a-zà-ÿ]/.test(w);
+  const rest = words.slice(1).filter(w => /^[A-Za-zÀ-ÿ]/.test(w));
+  if (words.length >= 3 && rest.length >= 2 && rest.filter(isCap).length / rest.length > 0.6) {
+    s = [words[0], ...words.slice(1).map(w => (isCap(w) ? w[0].toLowerCase() + w.slice(1) : w))].join(' ');
+  }
+  return s[0].toUpperCase() + s.slice(1);
+}
+
+/** Gerecht van de AI opschonen: vaste waarden, nette titel, juiste modus. */
+function cleanMeal(m: any, mode?: string) {
+  const out: any = { ...(m || {}) };
+  out.title = cleanTitle(out.title);
+  const main = canonMain(out.main_ingredient);
+  if (main) out.main_ingredient = main; else delete out.main_ingredient;
+  const cuisine = canonCuisine(out.cuisine);
+  if (cuisine) out.cuisine = cuisine; else delete out.cuisine;
+  out.diet_tags = canonDietTags(out.diet_tags);
+  out.kid_friendly = out.kid_friendly === true || out.kid_friendly === 'true';
+  const t = Number(out.estimated_time_minutes);
+  if (t > 0) out.estimated_time_minutes = Math.round(t);
+  if (mode) out.mode = mode;
+  return out;
 }
 
 // ---------------------------------------------------------------------------
 // Receptenbank (D1)
-//   data    = het gerecht (overzichtsvelden uit het weekmenu)
+//   data    = het gerecht (overzichtsvelden)
 //   details = volledig recept (ingrediënten, stappen, ...), voor BASE_SERVINGS personen
+//   overige kolommen = om snel te kunnen zoeken (modus, hoofdingrediënt, keuken, dieet, ...)
 // ---------------------------------------------------------------------------
+/** Versie van de receptregels. Recepten vanaf MIN_RECIPE_VERSION worden hergebruikt. */
+const RECIPE_VERSION = 4;
+const MIN_RECIPE_VERSION = 3;
+
+const EXTRA_COLUMNS: [string, string][] = [
+  ['mode', 'TEXT'], ['main', 'TEXT'], ['cuisine', 'TEXT'], ['diet_tags', 'TEXT'], ['kid', 'INTEGER NOT NULL DEFAULT 0'],
+  ['minutes', 'INTEGER'], ['details_v', 'INTEGER NOT NULL DEFAULT 0'], ['seed_cat', 'TEXT'], ['uses', 'INTEGER NOT NULL DEFAULT 0'],
+];
+
 let schemaReady: Promise<void> | null = null;
 function ensureSchema(env: Env) {
-  if (!schemaReady) {
-    schemaReady = env.DB.batch([
-      env.DB.prepare(`CREATE TABLE IF NOT EXISTS recipes (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        data TEXT NOT NULL,
-        details TEXT,
-        has_image INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )`),
-      env.DB.prepare('CREATE INDEX IF NOT EXISTS recipes_title ON recipes(title)'),
-    ]).then(() => undefined).catch((e: any) => { schemaReady = null; throw e; });
-  }
+  if (!schemaReady) schemaReady = migrate(env).catch((e: any) => { schemaReady = null; throw e; });
   return schemaReady;
+}
+
+async function migrate(env: Env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS recipes (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    data TEXT NOT NULL,
+    details TEXT,
+    has_image INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`).run();
+  const { results } = await env.DB.prepare('PRAGMA table_info(recipes)').all();
+  const have = new Set((results || []).map((r: any) => r.name));
+  const missing = EXTRA_COLUMNS.filter(([name]) => !have.has(name));
+  for (const [name, type] of missing) {
+    try {
+      await env.DB.prepare(`ALTER TABLE recipes ADD COLUMN ${name} ${type}`).run();
+    } catch (e) {
+      if (!/duplicate column/i.test(errMsg(e))) throw e; // tegelijk door een andere aanvraag toegevoegd
+    }
+  }
+  const stmts = [
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS recipes_title ON recipes(title)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS recipes_mode ON recipes(mode)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS recipes_seed ON recipes(seed_cat)'),
+  ];
+  if (missing.length) {
+    // Eenmalig: bestaande gerechten doorzoekbaar maken.
+    stmts.push(env.DB.prepare(`UPDATE recipes SET
+      mode = json_extract(data, '$.mode'),
+      main = lower(json_extract(data, '$.main_ingredient')),
+      cuisine = json_extract(data, '$.cuisine'),
+      minutes = json_extract(data, '$.estimated_time_minutes'),
+      details_v = COALESCE(json_extract(details, '$.v'), 0)
+      WHERE mode IS NULL`));
+  }
+  await env.DB.batch(stmts);
 }
 
 const imageUrl = (id: string) => `/api/images/${id}.jpg`;
 
-const SUMMARY_FIELDS = ['title', 'short_description', 'ai_image_prompt', 'main_ingredient', 'cuisine', 'estimated_time_minutes', 'difficulty',
-  'calories_per_portion', 'chefs_hack', 'wine_pairing', 'plating_tips', 'mode'];
+const SUMMARY_FIELDS = ['title', 'short_description', 'ai_image_prompt', 'main_ingredient', 'cuisine', 'estimated_time_minutes',
+  'difficulty', 'calories_per_portion', 'diet_tags', 'kid_friendly', 'chefs_hack', 'wine_pairing', 'plating_tips', 'mode'];
 
 /** Bewaart gerechten in de bank. Bestaande titels worden hergebruikt (incl. foto en volledig recept). */
-async function saveRecipes(env: Env, meals: any[]) {
+async function saveRecipes(env: Env, meals: any[], seedCat?: string) {
   await ensureSchema(env);
+  meals = meals.filter(Boolean);
+  if (!meals.length) return meals;
   meals.forEach(m => { m.title = String(m.title || '').trim() || 'Gerecht'; });
   const titles = [...new Set(meals.map(m => m.title))];
   const existing = new Map<string, any>();
@@ -145,8 +407,12 @@ async function saveRecipes(env: Env, meals: any[]) {
     existing.set(m.title, { id: m.id, has_image: 0 });
     const data: any = {};
     for (const k of SUMMARY_FIELDS) if (m[k] !== undefined) data[k] = m[k];
-    inserts.push(env.DB.prepare('INSERT INTO recipes (id, title, data) VALUES (?, ?, ?)')
-      .bind(m.id, m.title, JSON.stringify(data)));
+    const tags = canonDietTags(m.diet_tags);
+    inserts.push(env.DB.prepare(`INSERT INTO recipes (id, title, data, mode, main, cuisine, diet_tags, kid, minutes, seed_cat)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      m.id, m.title, JSON.stringify(data), m.mode || null, canonMain(m.main_ingredient) || null,
+      canonCuisine(m.cuisine) || null, tags.length ? `,${tags.join(',')},` : ',', m.kid_friendly ? 1 : 0,
+      Number(m.estimated_time_minutes) || null, seedCat || null));
   }
   if (inserts.length) await env.DB.batch(inserts);
   return meals;
@@ -162,16 +428,46 @@ async function findRecipe(env: Env, id?: string, title?: string) {
   return null;
 }
 
+/** Gerechten uit de bank ophalen zoals de app ze verwacht. */
+async function loadMeals(env: Env, ids: string[]) {
+  const out = new Map<string, any>();
+  if (!ids.length) return out;
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, data, has_image FROM recipes WHERE id IN (${ids.map(() => '?').join(',')})`
+  ).bind(...ids).all();
+  for (const r of results || []) {
+    out.set(r.id, { ...JSON.parse(r.data || '{}'), id: r.id, title: r.title, image_url: r.has_image ? imageUrl(r.id) : null });
+  }
+  await env.DB.prepare(`UPDATE recipes SET uses = uses + 1 WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).run();
+  return out;
+}
+
 // ---------------------------------------------------------------------------
-// Maaltijdfoto's (Workers AI -> R2), één keer per gerecht
+// Maaltijdfoto's (Workers AI -> webp -> R2), één keer per gerecht
 // ---------------------------------------------------------------------------
 const inflight = new Map<string, Promise<string>>();
+const IMAGE_WIDTH = 800;
 
 function base64ToBytes(b64: string) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
+}
+
+/** Verkleinen naar 800px webp (±80 KB i.p.v. ±740 KB). Lukt dat niet, dan het origineel. */
+async function toWebp(env: Env, bytes: Uint8Array): Promise<{ body: Uint8Array; type: string }> {
+  if (!env.IMAGES) return { body: bytes, type: 'image/jpeg' };
+  try {
+    const result = await env.IMAGES.input(new Response(bytes).body)
+      .transform({ width: IMAGE_WIDTH })
+      .output({ format: 'image/webp', quality: 80 });
+    const body = new Uint8Array(await result.response().arrayBuffer());
+    return body.length ? { body, type: 'image/webp' } : { body: bytes, type: 'image/jpeg' };
+  } catch (e) {
+    console.warn('Verkleinen mislukt, origineel bewaard:', errMsg(e));
+    return { body: bytes, type: 'image/jpeg' };
+  }
 }
 
 async function createImage(env: Env, recipe: any): Promise<string> {
@@ -183,50 +479,72 @@ async function createImage(env: Env, recipe: any): Promise<string> {
     '4k, cinematic lighting. Plated dish, appetizing, realistic. No text, no watermark, no people, no hands.';
   const out: any = await env.AI.run(IMAGE_MODEL, { prompt: prompt.slice(0, 2000), steps: 6 });
   if (!out?.image) throw new ApiError(502, 'Geen afbeelding ontvangen van Workers AI');
-  await env.PHOTOS.put(`meals/${recipe.id}.jpg`, base64ToBytes(out.image), {
-    httpMetadata: { contentType: 'image/jpeg' },
-  });
+  const { body, type } = await toWebp(env, base64ToBytes(out.image));
+  await env.PHOTOS.put(`meals/${recipe.id}.jpg`, body, { httpMetadata: { contentType: type } });
   await env.DB.prepare('UPDATE recipes SET has_image = 1 WHERE id = ?').bind(recipe.id).run();
   return imageUrl(recipe.id);
 }
 
-async function getOrCreateImage(env: Env, b: any) {
-  const recipe = await findRecipe(env, b.recipe_id, b.title);
-  if (!recipe) throw new ApiError(404, 'Recept staat niet in de receptenbank');
+function imageOnce(env: Env, recipe: any) {
   let p = inflight.get(recipe.id);
   if (!p) {
     p = createImage(env, recipe).finally(() => inflight.delete(recipe.id));
     inflight.set(recipe.id, p);
   }
-  return { status: 'success', url: await p };
+  return p;
+}
+
+async function getOrCreateImage(env: Env, b: any) {
+  const recipe = await findRecipe(env, b.recipe_id, b.title);
+  if (!recipe) throw new ApiError(404, 'Recept staat niet in de receptenbank');
+  return { status: 'success', url: await imageOnce(env, recipe) };
+}
+
+async function serveImage(env: Env, name: string, ctx: Ctx) {
+  const key = `meals/${name}`;
+  const obj = await env.PHOTOS.get(key);
+  if (!obj) return new Response('Niet gevonden', { status: 404 });
+  const headers = { 'cache-control': 'public, max-age=31536000, immutable' };
+  const type = obj.httpMetadata?.contentType || 'image/jpeg';
+  if (type === 'image/jpeg' && env.IMAGES) {
+    // Oude, grote foto: één keer verkleinen en de kleine versie bewaren.
+    const { body, type: newType } = await toWebp(env, new Uint8Array(await obj.arrayBuffer()));
+    if (newType === 'image/webp') background(ctx, () => env.PHOTOS.put(key, body, { httpMetadata: { contentType: newType } }));
+    return new Response(body, { headers: { ...headers, 'content-type': newType } });
+  }
+  return new Response(obj.body, { headers: { ...headers, 'content-type': type } });
 }
 
 // ---------------------------------------------------------------------------
 // Prompts (overgenomen uit het oorspronkelijke ontwerp)
 // ---------------------------------------------------------------------------
 const MEAL_SHAPE = `{
-  "title": "naam van het gerecht",
+  "title": "naam van het gerecht in gewone zinsopbouw: alleen het eerste woord en eigennamen met hoofdletter, bv. 'Kip tikka masala met naanbrood'",
   "short_description": "aantrekkelijke omschrijving in één zin",
   "ai_image_prompt": "korte Engelse beschrijving van hoe het opgemaakte bord eruitziet",
   "estimated_time_minutes": 30,
   "difficulty": "Makkelijk | Gemiddeld | Gevorderd",
   "calories_per_portion": 600,
-  "chefs_hack": "één slimme kooktip",
-  "wine_pairing": {"type": "wijnsoort", "description": "waarom deze wijn past"},
-  "plating_tips": "professionele opmaaktips (vooral voor culinary)",
-  "mode": "premium of culinary",
-  "main_ingredient": "belangrijkste ingrediënt in één woord, bv. kip, rundvlees, varkensvlees, zalm, kabeljauw, garnalen, kikkererwten, linzen, tofu, ei, kaas",
-  "cuisine": "keuken in één woord, bv. Italiaans, Aziatisch, Indiaas, Mexicaans, Hollands, Frans, Mediterraan, Midden-Oosters"
-}`;
+  "main_ingredient": "precies één uit: ${MAINS.join(', ')}",
+  "cuisine": "precies één uit: ${CUISINES.join(', ')}",
+  "diet_tags": ["alle die echt van toepassing zijn uit: ${DIET_TAGS.join(', ')}"],
+  "kid_friendly": true
+}
+UITLEG VELDEN:
+- main_ingredient is het eiwit of hoofdbestanddeel. Hert, ree, fazant, konijn = wild. Kabeljauw, zeebaars, schol,
+  heek = witvis. Makreel, forel, haring = vis. Garnalen, mosselen, inktvis = zeevruchten. Bonen, kikkererwten,
+  linzen = peulvruchten. Vegetarisch zonder duidelijk eiwit: groenten, pasta, rijst of aardappel.
+- kid_friendly: true als kinderen van 4-12 jaar het lusten: mild (niet pittig), geen alcohol, herkenbaar.`;
 
-/** Verhoog dit als de receptregels veranderen: oudere bewaarde recepten worden dan opnieuw gemaakt. */
-const RECIPE_VERSION = 3;
+const SHOP_CATEGORIES = ['Groente & fruit', 'Vlees, vis & vega', 'Zuivel, kaas & eieren', 'Brood & bakkerij',
+  'Pasta, rijst & granen', 'Conserven & sauzen', 'Kruiden & specerijen', 'Olie, azijn & bakproducten', 'Diepvries', 'Overig'];
 
 const FULL_RECIPE_SHAPE = `{
-  "ingredients": [{"name": "...", "amount": 0, "unit": "gram | ml | stuks | eetlepel | theelepel | teen | bosje | snufje | naar smaak"}],
+  "ingredients": [{"name": "...", "amount": 0, "unit": "gram | ml | stuks | eetlepel | theelepel | teen | bosje | blik | snufje | naar smaak", "category": "precies één uit: ${SHOP_CATEGORIES.join(' | ')}"}],
   "steps": [{"step_index": 1, "user_text": "...", "needs_timer": false, "timer_label": "...", "estimated_duration_seconds": 0}],
   "supplies": ["benodigd keukengerei"],
   "nutrition": {"calories": 0},
+  "chefs_hack": "één slimme kooktip",
   "plating_tips": "...",
   "wine_pairing": {"type": "...", "description": "..."}
 }`;
@@ -240,12 +558,15 @@ const RECIPE_RULES = `KWALITEITSREGELS (controleer je recept hierop voordat je a
 5. De laatste stap is altijd het opdienen: hoe alles op het bord komt, inclusief sauzen en garnering.
 6. Gebruik praktische keukenmaten: hele stuks waar logisch (1 citroen, 2 tenen knoflook), kruiden in bosjes of
    eetlepels, kleine hoeveelheden in theelepels. Zout en peper als unit "naar smaak" met amount 0.
+   Vlees, vis, groente, pasta, rijst en zuivel in gram of ml (niet in stuks), behalve wat je per stuk koopt
+   (ui, ei, paprika, citroen, kipfilet per stuk mag ook in gram).
 7. Correcte spelling en grammatica in het Nederlands (enkelvoud bij 1: "1 eetlepel").
 8. Benodigdheden bevat alleen keukengerei dat in de stappen echt gebruikt wordt.
 9. Noem in de stappen GEEN hoeveelheden (geen grammen, milliliters of aantallen), want de app rekent de
    ingrediëntenlijst om naar het huishouden en de stappen niet. Verwijs naar het ingrediënt ("de boter",
    "de bouillon") en bij verdelen naar een deel ("de helft van de boter", "de rest van de tijm").
-   Temperaturen en tijden mogen wel.`;
+   Temperaturen en tijden mogen wel.
+10. Geef elk ingrediënt een supermarktcategorie uit de vaste lijst (voor de boodschappenlijst).`;
 
 const TIMER_RULES = `STRIKTE TIMER REGELS:
 1. NOOIT een timer voor de oven (ovens hebben eigen timers).
@@ -281,98 +602,69 @@ Stem de gerechten hierop af, maar blijf verrassen: ongeveer 1 op de 7 gerechten 
     : '';
 };
 
-// ---------------------------------------------------------------------------
-// Endpoints
-// ---------------------------------------------------------------------------
-async function weeklyPlan(env: Env, b: any) {
-  const prefs = b.prefs || {};
-  const v = buildVariety(b, prefs);
-  const dayModes: Record<string, string> = prefs.dayModes || {};
-  const modes = Object.entries(dayModes).sort(([a], [c]) => Number(a) - Number(c))
-    .map(([d, m]) => `Day ${d}: ${m}`).join(', ');
+const WEEK_PROFILE_RULES: Record<string, string> = {
+  family_mix: 'Gezinsmix: gezond, gevarieerd en geliefd door iedereen; herkenbare gerechten die ook kinderen lusten.',
+  world_explorer: 'Wereldontdekker: elke dag een andere wereldkeuken, nooit twee keer dezelfde keuken in een week.',
+  quick_easy: 'Snel & makkelijk: doordeweeks hoogstens 30 minuten, weinig stappen en weinig afwas.',
+  kid_friendly: 'KINDVRIENDELIJK (STRIKT): milde smaken, niet pittig, geen alcohol in het gerecht, geen rauwe vis, geen luxe of '
+    + 'exotische onderdelen (zoals foie gras, oesters, truffel, wild); herkenbare ingrediënten die kinderen lusten. Zet kid_friendly op true.',
+  surprise: 'Verrassing: een avontuurlijke, gevarieerde mix gekozen door de chef.',
+};
 
-  const system = `Je bent de culinaire motor van Qook (KOOQ).
-Je genereert een 7-daags menu (0-6). Schrijf alle teksten in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
-
-AGENDA (STRIKT VOLGEN):
-${modes}
-
-STRIKTE VARIATIE REGELS:
-${varietyRules(v)}
-- INSPIRE: De gebruiker houdt van gerechten zoals: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik deze lijst om de smaakvoorkeuren te begrijpen en genereer vooral NIEUWE gerechten in diezelfde sfeer.
-
-ZERO-WASTE INSTRUCTIE:
-- Zero-Waste Level: ${prefs.zeroWasteLevel ?? 50}% (0 = maximale variatie, 100 = maximale efficiency/hergebruik ingrediënten).
-- Bij een hoog level: Gebruik grote ingrediënten (bloemkool, zak spinazie, hele kip) in meerdere gerechten verspreid over de week om verspilling te voorkomen.
-- Schrijf een kort 'zero_waste_report' waarin je uitlegt hoe je deze week verspilling voorkomt.
-
-${MODE_RULES}
-${availabilityRules(prefs.region)}
-
-${tasteBlock(prefs.tasteProfile)}
-
-VOORWAARDEN:
-- Dieet: ${joinOr(prefs.diet, 'Geen')}
-- Huishouden: ${prefs.adultsCount ?? 2} volw, ${prefs.childrenCount ?? 0} kind.
+/** Voorkeuren uit de onboarding en instellingen. */
+function conditionsBlock(prefs: any) {
+  const kitchens = list(prefs.kitchenProfiles);
+  return `VOORWAARDEN:
+- Dieet: ${joinOr(prefs.diet, 'Geen')}${prefs.customDiet ? ` (${String(prefs.customDiet).slice(0, 200)})` : ''}
+- Huishouden: ${prefs.adultsCount ?? 2} volwassenen, ${prefs.childrenCount ?? 0} kinderen.
 - Budget: ${prefs.budget || 'Normaal'}.
-- Kooktijd: doordeweeks maximaal ${prefs.cookingTime || '30'} min, weekend ${prefs.weekendCookingTime || 'unlimited'}.
-- VARIATIE: Zorg dat elk gerecht UNIEK is in ingrediënten, tenzij het Zero-Waste level hoog is.
-
-Antwoord uitsluitend met JSON: {"zero_waste_report": "...", "days": [7 gerechten in deze vorm: ${MEAL_SHAPE}]}`;
-
-  const data = await aiJson(env, system, 'Genereer het weekmenu en het zero-waste rapport.', 0.9);
-  const days = list(data.days).slice(0, 7);
-  days.forEach((m: any, i: number) => { m.mode = dayModes[String(i)] || 'premium'; });
-
-  // Harde controle: geen dubbele gerechten, niets dat recent gegeten of afgekeurd is,
-  // maximaal 1 favoriet, elk hoofdingrediënt max 2x en elke keuken max 3x per week.
-  for (let i = 0; i < days.length; i++) {
-    const reason = conflictReason(days[i], days.slice(0, i), v);
-    if (!reason) continue;
-    console.warn(`Dag ${i}: "${days[i].title}" afgekeurd (${reason}), wordt vervangen`);
-    const others = days.filter((_: any, j: number) => j !== i);
-    try {
-      days[i] = await generateOneMeal(env, prefs, i, others, v, b.favoriteTitles, days[i].title);
-    } catch (e) {
-      console.error(`Dag ${i}: geen geldig alternatief gevonden, origineel blijft staan`, e);
-    }
-  }
-
-  await saveRecipes(env, days);
-  return { days, zero_waste_report: data.zero_waste_report || '' };
+- Weekprofiel: ${WEEK_PROFILE_RULES[prefs.weekProfile] || WEEK_PROFILE_RULES.surprise}${kitchens.length ? `
+- Favoriete keukens: ${kitchens.join(', ')}. Kies vooral hieruit, maar wissel binnen de week af.` : ''}`;
 }
 
 // ---------------------------------------------------------------------------
 // Dubbele gerechten voorkomen
 // ---------------------------------------------------------------------------
 const STOPWORDS = new Set(['met', 'en', 'van', 'de', 'het', 'een', 'in', 'op', 'uit', 'aan', 'bij', 'voor', 'with', 'and', 'the', 'of']);
-const normTitle = (t: any) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 const titleWords = (t: any) => new Set(normTitle(t).split(' ').filter(w => w.length > 2 && !STOPWORDS.has(w)));
 
-/** Zelfde gerecht als een van de andere? Exact gelijk, of grotendeels dezelfde woorden. */
-const isDuplicate = (title: any, others: any[]) => {
-  const n = normTitle(title);
-  if (!n) return false;
-  const a = titleWords(title);
-  return others.some(o => {
-    if (normTitle(o) === n) return true;
-    const b = titleWords(o);
-    if (!a.size || !b.size) return false;
-    // Woorden tellen als gelijk bij exacte match of als het ene woord het andere bevat
-    // ("bospaddenstoelensaus" bevat "paddenstoelensaus").
-    const same = (x: string, y: string) => x === y || (Math.min(x.length, y.length) >= 5 && (x.includes(y) || y.includes(x)));
-    const shared = [...a].filter(w => [...b].some(v => same(w, v))).length;
-    return shared / Math.min(a.size, b.size) >= 0.75;
-  });
+// Woorden tellen als gelijk bij exacte match of als het ene woord het andere bevat
+// ("bospaddenstoelensaus" bevat "paddenstoelensaus").
+const sameWord = (x: string, y: string) => x === y || (Math.min(x.length, y.length) >= 5 && (x.includes(y) || y.includes(x)));
+
+/** Maakt een snelle controle "lijkt deze titel op een van deze titels?" (lijst wordt één keer voorbereid). */
+function dupMatcher(others: any[]) {
+  const prepared = others.map(o => ({ n: normTitle(o), w: [...titleWords(o)] })).filter(p => p.n);
+  const exact = new Set(prepared.map(p => p.n));
+  return (title: any) => {
+    const n = normTitle(title);
+    if (!n) return false;
+    if (exact.has(n)) return true;
+    const a = [...titleWords(title)];
+    if (!a.length) return false;
+    return prepared.some(p => {
+      if (!p.w.length) return false;
+      const shared = a.filter(w => p.w.some(v => sameWord(w, v))).length;
+      return shared / Math.min(a.length, p.w.length) >= 0.75;
+    });
+  };
+}
+const matcherCache = new WeakMap<any[], (t: any) => boolean>();
+const matcherFor = (arr: any[]) => {
+  let m = matcherCache.get(arr);
+  if (!m) { m = dupMatcher(arr); matcherCache.set(arr, m); }
+  return m;
 };
+
+/** Zelfde gerecht als een van de andere? Exact gelijk, of grotendeels dezelfde woorden. */
+const isDuplicate = (title: any, others: any[]) => dupMatcher(others)(title);
 
 // ---------------------------------------------------------------------------
 // Variatie over weken heen
 //   - gewone gerechten: niet terug binnen 8 weken
 //   - favorieten: na 4 weken weer toegestaan, max. 1 per week
 //   - duim omlaag: nooit meer
-//   - per week: elk hoofdingrediënt max. 2x, elke keuken max. 3x
+//   - per week: elk hoofdingrediënt max. 2x, elke keuken max. 3x (bij het kiezen uit de bank max. 2x)
 // ---------------------------------------------------------------------------
 const NORMAL_WEEKS = 8;
 const FAVORITE_WEEKS = 4;
@@ -384,9 +676,8 @@ interface Variety {
   favorites: string[];          // alle favorieten van de gebruiker
   favoritesAllowed: string[];   // favorieten die weer mogen (lang genoeg geleden)
   recentCuisines: string;       // "Italiaans 4x, Aziatisch 3x" (laatste 3 weken)
+  recentCuisineNames?: string[];
 }
-
-const normWord = (w: any) => normTitle(w).split(' ')[0] || '';
 
 function buildVariety(b: any, prefs: any): Variety {
   let history = list(b.history).filter((h: any) => h && h.title)
@@ -397,23 +688,27 @@ function buildVariety(b: any, prefs: any): Variety {
   }
   const favorites = list(b.favoriteTitles).map(String);
   const disliked = list(b.dislikedTitles).map(String);
-  const isFav = (t: string) => isDuplicate(t, favorites);
+  const isFav = matcherFor(favorites);
 
   const blocked = [...disliked];
   for (const h of history) {
     const window = isFav(h.title) ? FAVORITE_WEEKS : NORMAL_WEEKS;
     if (h.weeksAgo < window) blocked.push(h.title);
   }
-  const favoritesAllowed = favorites.filter(f => !isDuplicate(f, blocked));
+  const blockedMatch = dupMatcher(blocked);
+  const favoritesAllowed = favorites.filter(f => !blockedMatch(f));
 
   const counts: Record<string, number> = {};
   for (const h of history) if (h.weeksAgo < 3 && h.cuisine) {
     const c = String(h.cuisine);
     counts[c] = (counts[c] || 0) + 1;
   }
-  const recentCuisines = Object.entries(counts).sort((a, c) => c[1] - a[1]).slice(0, 4)
-    .map(([c, n]) => `${c} ${n}x`).join(', ');
-  return { blocked: [...new Set(blocked)].slice(-150), favorites, favoritesAllowed, recentCuisines };
+  const top = Object.entries(counts).sort((a, c) => c[1] - a[1]).slice(0, 4);
+  const recentCuisines = top.map(([c, n]) => `${c} ${n}x`).join(', ');
+  return {
+    blocked: [...new Set(blocked)].slice(-150), favorites, favoritesAllowed, recentCuisines,
+    recentCuisineNames: top.filter(([, n]) => n >= 3).map(([c]) => c),
+  };
 }
 
 function varietyRules(v: Variety) {
@@ -426,9 +721,10 @@ function varietyRules(v: Variety) {
 /** Waarom past dit gerecht niet in de week? null = het past. */
 function conflictReason(meal: any, week: any[], v: Variety): string | null {
   const title = meal?.title;
+  if (!normTitle(title)) return 'geen naam';
   if (isDuplicate(title, week.map(m => m.title))) return 'staat al in deze week';
-  if (isDuplicate(title, v.blocked)) return 'recent gegeten of afgekeurd';
-  const isFav = (t: any) => isDuplicate(t, v.favorites);
+  if (matcherFor(v.blocked)(title)) return 'recent gegeten of afgekeurd';
+  const isFav = matcherFor(v.favorites);
   if (isFav(title) && week.some(m => isFav(m.title))) return 'al een favoriet deze week';
   const main = normWord(meal?.main_ingredient);
   if (main && week.filter(m => normWord(m.main_ingredient) === main).length >= MAX_SAME_MAIN) {
@@ -441,9 +737,261 @@ function conflictReason(meal: any, week: any[], v: Variety): string | null {
   return null;
 }
 
+/** Vervanger mag niet zowel hetzelfde hoofdingrediënt als dezelfde keuken hebben (Kip madras → Kip tikka masala). */
+function tooSimilar(meal: any, current?: any) {
+  if (!current) return false;
+  const a = normWord(meal?.main_ingredient), b = normWord(current.main_ingredient);
+  const c = normWord(meal?.cuisine), d = normWord(current.cuisine);
+  return !!(a && b && c && d && a === b && c === d);
+}
+
+// ---------------------------------------------------------------------------
+// Weekplanning
+// ---------------------------------------------------------------------------
+interface DayPlan { mode: string; bankMode: string; maxTime: number; rawTime: any }
+
+const timeLimit = (v: any) => { const n = Number(v); return n > 0 ? n : 999; };
+const fmtTime = (n: number) => (n >= 999 ? 'onbeperkt' : `${n} min`);
+
+function dayPlans(prefs: any): DayPlan[] {
+  const quick = prefs.weekProfile === 'quick_easy';
+  const modes = prefs.dayModes || {};
+  return Array.from({ length: 7 }, (_, i) => {
+    const mode = modes[String(i)] || 'premium';
+    const rawTime = i >= 5 ? (prefs.weekendCookingTime ?? 'unlimited') : (prefs.cookingTime ?? '30');
+    let maxTime = timeLimit(rawTime);
+    if (quick && i < 5) maxTime = Math.min(maxTime, 30);
+    return { mode, bankMode: mode === 'culinary' ? 'culinary' : 'premium', maxTime, rawTime };
+  });
+}
+
+/** De bank bevat Nederlandse recepten voor de Nederlandse/Belgische supermarkt. */
+const bankUsable = (prefs: any) =>
+  String(prefs.language || 'nl').toLowerCase().startsWith('nl') &&
+  ['NL', 'BE'].includes(String(prefs.region || 'NL').toUpperCase()) && userDiet(prefs).ok;
+
+/** Minimaal zoveel bruikbare gerechten in de bank voordat we eruit kiezen (anders te weinig keus). */
+const MIN_POOL = 10;
+
+interface Candidate {
+  id: string; title: string; mode: string; main_ingredient: string; cuisine: string;
+  kid: boolean; minutes: number; score: number;
+}
+
+async function bankCandidates(env: Env, prefs: any, modes: string[], limit: number): Promise<Candidate[]> {
+  await ensureSchema(env);
+  const diet = userDiet(prefs);
+  const where = [`mode IN (${modes.map(() => '?').join(',')})`];
+  const args: any[] = [...modes];
+  for (const t of diet.tags) { where.push('diet_tags LIKE ?'); args.push(`%,${t},%`); }
+  if (prefs.weekProfile === 'kid_friendly') where.push(`(kid = 1 OR mode = 'culinary')`);
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, mode, main, cuisine, kid, minutes, has_image, details_v FROM recipes
+     WHERE ${where.join(' AND ')} ORDER BY RANDOM() LIMIT ${Number(limit) || 100}`
+  ).bind(...args).all();
+  return (results || []).map((r: any) => ({
+    id: r.id, title: r.title, mode: r.mode, main_ingredient: r.main || '', cuisine: r.cuisine || '',
+    kid: !!r.kid, minutes: Number(r.minutes) || 30,
+    score: (r.has_image ? 0.5 : 0) + (Number(r.details_v) >= MIN_RECIPE_VERSION ? 0.5 : 0),
+  }));
+}
+
+/** Volgorde van voorkeur: keukenvoorkeur, kindvriendelijk, favoriet, niet te vaak dezelfde keuken + toeval. */
+function scoreCandidates(rows: Candidate[], prefs: any, v: Variety) {
+  const liked = preferredCuisines(prefs.kitchenProfiles);
+  const recent = new Set(list(v.recentCuisineNames).map(normWord));
+  const kids = (Number(prefs.childrenCount) || 0) > 0 || prefs.weekProfile === 'family_mix';
+  const fav = matcherFor(v.favoritesAllowed);
+  for (const r of rows) {
+    const c = normWord(r.cuisine);
+    r.score += Math.random() * 2 + (liked.has(c) ? 3 : 0) + (kids && r.kid ? 1.5 : 0)
+      + (fav(r.title) ? 1 : 0) - (recent.has(c) ? 1 : 0);
+  }
+  return rows.sort((a, b) => b.score - a.score);
+}
+
+const fitsDay = (c: Candidate, p: DayPlan) => c.mode === p.bankMode && c.minutes <= p.maxTime + 5;
+
+/** Strengere variatie bij het kiezen uit de bank (wereldontdekker: elke keuken 1x). */
+function capsOk(c: any, week: any[], prefs: any) {
+  const cap = prefs.weekProfile === 'world_explorer' ? 1 : 2;
+  const cu = normWord(c.cuisine);
+  return !cu || week.filter(m => normWord(m.cuisine) === cu).length < cap;
+}
+
+/** Laat de AI uit een korte lijst kiezen (smaakprofiel, zero-waste). Snel: alleen nummers terug. */
+async function aiPick(env: Env, prefs: any, b: any, v: Variety, plans: DayPlan[], shortlist: Candidate[]) {
+  const agenda = plans.map((p, i) => `Dag ${i}: ${p.bankMode}, hoogstens ${fmtTime(p.maxTime)}`).join('\n');
+  const system = `Je bent de chef van Qook en stelt een weekmenu samen uit BESTAANDE recepten.
+Kies voor elke dag (0-6) precies één nummer uit de lijst. Schrijf in het ${langName(prefs.language)}.
+
+AGENDA (STRIKT):
+${agenda}
+
+REGELS:
+- Alleen een gerecht met de juiste modus en binnen de tijd van die dag. Nooit een nummer twee keer.
+- Elk hoofdingrediënt hoogstens ${MAX_SAME_MAIN}x; wissel keukens af.
+- FAVORIETEN die weer mogen (hoogstens 1): ${joinOr(v.favoritesAllowed, 'Geen')}.
+${conditionsBlock(prefs)}
+${tasteBlock(prefs.tasteProfile)}
+
+ZERO-WASTE: level ${prefs.zeroWasteLevel ?? 50}% (0 = maximale variatie, 100 = zoveel mogelijk dezelfde verse ingrediënten
+hergebruiken). Schrijf een kort 'zero_waste_report' (1-2 zinnen) over hoe deze week verspilling voorkomt.
+
+Antwoord uitsluitend met JSON: {"picks": [7 nummers, voor dag 0 t/m 6], "zero_waste_report": "..."}`;
+  const lines = shortlist.map((c, i) =>
+    `${i} | ${c.title} | ${c.mode} | ${c.cuisine || '-'} | ${c.main_ingredient || '-'} | ${c.minutes} min${c.kid ? ' | kindvriendelijk' : ''}`);
+  const data = await aiJson(env, system, `GERECHTEN:\n${lines.join('\n')}`, 0.4, undefined, undefined,
+    { timeoutMs: 20000, retries: 0 });
+  return { picks: list(data.picks).map(Number), report: typeof data.zero_waste_report === 'string' ? data.zero_waste_report : '' };
+}
+
+/** Weekmenu uit de receptenbank. Dagen zonder geschikt gerecht blijven leeg (null). */
+async function pickFromBank(env: Env, prefs: any, b: any, v: Variety, plans: DayPlan[]) {
+  const modes = [...new Set(plans.map(p => p.bankMode))];
+  const rows = scoreCandidates(await bankCandidates(env, prefs, modes, 160), prefs, v);
+  const pool: Candidate[] = [];
+  for (const c of rows) {
+    if (!conflictReason(c, [], v)) pool.push(c);
+    if (pool.length >= 60) break;
+  }
+  if (pool.length < MIN_POOL) return null;
+
+  const week: (Candidate | null)[] = Array(7).fill(null);
+  const ok = (c: Candidate, i: number) => {
+    const chosen = week.filter(Boolean) as Candidate[];
+    return fitsDay(c, plans[i]) && !chosen.includes(c) && !conflictReason(c, chosen, v) && capsOk(c, chosen, prefs);
+  };
+
+  // Korte lijst voor de AI: de beste kandidaten per benodigde modus.
+  const shortlist = modes.flatMap(m => pool.filter(c => c.mode === m).slice(0, m === 'culinary' ? 12 : 30));
+  let report = '';
+  try {
+    const r = await aiPick(env, prefs, b, v, plans, shortlist);
+    report = r.report;
+    r.picks.slice(0, 7).forEach((n, i) => {
+      const c = shortlist[n];
+      if (c && ok(c, i)) week[i] = c;
+    });
+  } catch (e) {
+    console.warn('AI-keuze uit de bank mislukt, keuze op score:', errMsg(e));
+  }
+
+  // Rest aanvullen: dagen met de minste keus eerst.
+  const options = (i: number) => pool.filter(c => fitsDay(c, plans[i])).length;
+  const open = [...Array(7).keys()].filter(i => !week[i]).sort((a, c) => options(a) - options(c));
+  for (const i of open) {
+    const c = pool.find(x => ok(x, i));
+    if (c) week[i] = c;
+  }
+  return { week, report };
+}
+
+async function weeklyPlan(env: Env, b: any, ctx?: Ctx) {
+  const prefs = b.prefs || {};
+  const v = buildVariety(b, prefs);
+  const plans = dayPlans(prefs);
+  const days: any[] = Array(7).fill(null);
+  let report = '';
+
+  if (bankUsable(prefs)) {
+    try {
+      const picked = await pickFromBank(env, prefs, b, v, plans);
+      if (picked) {
+        const meals = await loadMeals(env, picked.week.filter(Boolean).map(c => c!.id));
+        picked.week.forEach((c, i) => { if (c && meals.has(c.id)) days[i] = { ...meals.get(c.id), mode: plans[i].mode }; });
+        report = picked.report;
+      }
+    } catch (e) {
+      console.error('Receptenbank niet bruikbaar, de AI maakt het menu:', errMsg(e));
+    }
+  }
+
+  const gaps = days.map((m, i) => (m ? -1 : i)).filter(i => i >= 0);
+  if (gaps.length) {
+    const r = await generateForDays(env, prefs, b, v, plans, gaps, days);
+    if (!report) report = r.report;
+  }
+
+  await saveRecipes(env, days);
+  background(ctx, () => prewarm(env, days, prefs));
+  return { days, zero_waste_report: report };
+}
+
+/** De AI maakt gerechten voor de lege dagen (bij een lege bank: de hele week). */
+async function generateForDays(env: Env, prefs: any, b: any, v: Variety, plans: DayPlan[], gaps: number[], days: any[]) {
+  const planned = days.filter(Boolean);
+  const agenda = gaps.map(i => `Day ${i}: ${plans[i].mode}, hoogstens ${fmtTime(plans[i].maxTime)}`).join('\n');
+  const wantReport = gaps.length >= 4;
+
+  const system = `Je bent de culinaire motor van Qook (KOOQ).
+Je maakt ${gaps.length} gerecht(en) voor een 7-daags menu (dagen 0-6). Schrijf alle teksten in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
+
+AGENDA (STRIKT VOLGEN, in deze volgorde):
+${agenda}
+${planned.length ? `
+AL GEPLAND DEZE WEEK (niet herhalen, ook geen varianten; tel mee voor de variatieregels):
+${planned.map(m => `- ${m.title} (${m.main_ingredient || '?'}, ${m.cuisine || '?'})`).join('\n')}
+` : ''}
+STRIKTE VARIATIE REGELS:
+${varietyRules(v)}
+- INSPIRE: De gebruiker houdt van gerechten zoals: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik deze lijst om de smaakvoorkeuren te begrijpen en genereer vooral NIEUWE gerechten in diezelfde sfeer.
+${wantReport ? `
+ZERO-WASTE INSTRUCTIE:
+- Zero-Waste Level: ${prefs.zeroWasteLevel ?? 50}% (0 = maximale variatie, 100 = maximale efficiency/hergebruik ingrediënten).
+- Bij een hoog level: Gebruik grote ingrediënten (bloemkool, zak spinazie, hele kip) in meerdere gerechten verspreid over de week om verspilling te voorkomen.
+- Schrijf een kort 'zero_waste_report' waarin je uitlegt hoe je deze week verspilling voorkomt.
+` : ''}
+${MODE_RULES}
+${availabilityRules(prefs.region)}
+
+${tasteBlock(prefs.tasteProfile)}
+
+${conditionsBlock(prefs)}
+- VARIATIE: Zorg dat elk gerecht UNIEK is in ingrediënten, tenzij het Zero-Waste level hoog is.
+
+Antwoord uitsluitend met JSON: {${wantReport ? '"zero_waste_report": "...", ' : ''}"days": [${gaps.length} gerecht(en) in de volgorde van de agenda, elk in deze vorm: ${MEAL_SHAPE}]}`;
+
+  const data = await aiJson(env, system, 'Genereer de gerechten.', 0.9);
+  const out = list(data.days);
+
+  // Harde controle: geen dubbele gerechten, niets dat recent gegeten of afgekeurd is,
+  // maximaal 1 favoriet, elk hoofdingrediënt max 2x en elke keuken max 3x per week.
+  const rejected: Record<number, any> = {};
+  const redo: number[] = [];
+  gaps.forEach((dayIdx, k) => {
+    const m = out[k] ? cleanMeal(out[k], plans[dayIdx].mode) : null;
+    const tooLong = m && Number(m.estimated_time_minutes) > plans[dayIdx].maxTime + 10 ? 'kooktijd te lang' : null;
+    const reason = m ? conflictReason(m, days.filter(Boolean), v) || tooLong : 'ontbreekt';
+    if (!reason) { days[dayIdx] = m; return; }
+    console.warn(`Dag ${dayIdx}: "${m?.title || '-'}" afgekeurd (${reason}), wordt vervangen`);
+    if (m) rejected[dayIdx] = m;
+    redo.push(dayIdx);
+  });
+
+  if (redo.length) {
+    // Tegelijk vervangen in plaats van na elkaar (scheelt minuten).
+    const settled = days.filter(Boolean);
+    const results = await Promise.all(redo.map(i =>
+      generateOneMeal(env, prefs, i, settled, v, b.favoriteTitles, rejected[i]?.title || '')
+        .catch(e => { console.error(`Dag ${i}: geen geldig alternatief gevonden`, errMsg(e)); return null; })));
+    for (let k = 0; k < redo.length; k++) {
+      const i = redo[k];
+      let m = results[k];
+      if (m && conflictReason(m, days.filter(Boolean), v)) {
+        // Twee vervangers tegelijk kozen iets gelijkaardigs: deze nog één keer opnieuw.
+        m = await generateOneMeal(env, prefs, i, days.filter(Boolean), v, b.favoriteTitles, m.title).catch(() => null);
+      }
+      days[i] = m || rejected[i] || null;
+    }
+  }
+  if (days.some(d => !d)) throw new ApiError(502, 'Het weekmenu kon niet compleet gemaakt worden. Probeer het nog eens.');
+  return { report: typeof data.zero_waste_report === 'string' ? data.zero_waste_report : '' };
+}
+
 /** Eén gerecht voor een dag dat in de week past (max. 2 pogingen). */
 async function generateOneMeal(env: Env, prefs: any, dayIndex: number, weekOthers: any[], v: Variety,
-                               favoriteTitles: any, currentTitle = ''): Promise<any> {
+                               favoriteTitles: any, currentTitle = '', current?: any): Promise<any> {
   const targetMode = (prefs.dayModes || {})[String(dayIndex)] || 'premium';
   const maxTime = dayIndex >= 5 ? prefs.weekendCookingTime : prefs.cookingTime;
   const weekTitles = weekOthers.map(m => m.title).filter(Boolean);
@@ -455,12 +1003,15 @@ async function generateOneMeal(env: Env, prefs: any, dayIndex: number, weekOther
   const fullMains = Object.entries(countBy('main_ingredient')).filter(([, n]) => n >= MAX_SAME_MAIN).map(([k]) => k);
   const fullCuisines = Object.entries(countBy('cuisine')).filter(([, n]) => n >= MAX_SAME_CUISINE - 1).map(([k]) => k);
   const vReplace: Variety = { ...v, blocked: [...v.blocked, ...(currentTitle ? [currentTitle] : [])] };
+  const differ = current?.main_ingredient && current?.cuisine
+    ? `\nANDERS DAN HET HUIDIGE GERECHT (STRIKT): kies een ander hoofdingrediënt dan "${current.main_ingredient}" of een andere keuken dan "${current.cuisine}", liefst allebei.`
+    : '';
 
   const system = (lastReason?: string) => `Je vervangt een specifiek gerecht in een weekmenu. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
 STRIKTE RICHTLIJNEN VOOR MODE "${targetMode}".
 ${MODE_RULES}
 ${availabilityRules(prefs.region)}
-VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}".
+VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}".${differ}
 ${varietyRules(vReplace)}
 DEZE WEEK STAAT AL GEPLAND (NOOIT HETZELFDE OF EEN VARIANT DAARVAN KIEZEN, OOK GEEN ANDER HOOFDINGREDIËNT-PLUS-SAUS-COMBINATIE DIE EROP LIJKT): ${joinOr(weekTitles, 'Geen')}.${fullMains.length ? `
 NIET ALS HOOFDINGREDIËNT (komt deze week al vaak voor): ${fullMains.join(', ')}.` : ''}${fullCuisines.length ? `
@@ -468,108 +1019,283 @@ LIEVER NIET UIT DEZE KEUKEN: ${fullCuisines.join(', ')}.` : ''}${lastReason ? `
 LET OP: je vorige voorstel werd afgekeurd (${lastReason}). Kies nu een duidelijk ander hoofdingrediënt en een andere bereidingswijze.` : ''}
 SMAAKVOORKEUR: De gebruiker vindt dit lekker: ${joinOr(favoriteTitles, 'Nog geen favorieten')}. Gebruik dit als inspiratie voor de stijl van het nieuwe gerecht.
 VOORKEUREN: Dieet: ${joinOr(prefs.diet, 'Geen')}. Tijd: Maximaal ${maxTime || '30'} min. Budget: ${prefs.budget || 'Normaal'}.
+${conditionsBlock(prefs)}
 ${tasteBlock(prefs.tasteProfile)}
 Antwoord uitsluitend met JSON in deze vorm: ${MEAL_SHAPE}`;
 
   let lastReason: string | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const meal = await aiJson(env, system(lastReason), `Vervang "${currentTitle}" door een nieuw gerecht in de modus ${targetMode}.`, 1.0);
-    lastReason = conflictReason(meal, weekOthers, vReplace) || undefined;
-    if (!lastReason) {
-      meal.mode = targetMode;
-      return meal;
-    }
+    const meal = cleanMeal(await aiJson(env, system(lastReason),
+      `Vervang "${currentTitle}" door een nieuw gerecht in de modus ${targetMode}.`, 1.0), targetMode);
+    lastReason = conflictReason(meal, weekOthers, vReplace)
+      || (tooSimilar(meal, current) ? 'zelfde hoofdingrediënt én keuken als het huidige gerecht' : null) || undefined;
+    if (!lastReason) return meal;
     console.warn(`Voorstel "${meal.title}" afgekeurd: ${lastReason}`);
   }
   throw new ApiError(409, 'Er kon geen ander gerecht gevonden worden dat nog niet in je week staat. Probeer het nog eens.');
 }
 
-async function replaceMeal(env: Env, b: any) {
+/** Hoofdingrediënt en keuken van het gerecht dat vervangen wordt (uit de app of uit de bank). */
+async function currentMealInfo(env: Env, cm: any) {
+  const info: any = { title: String(cm?.title || ''), main_ingredient: canonMain(cm?.main_ingredient), cuisine: canonCuisine(cm?.cuisine) };
+  if ((!info.main_ingredient || !info.cuisine) && (cm?.id || cm?.title)) {
+    const row = await findRecipe(env, cm.id, cm.title).catch(() => null);
+    if (row) {
+      const d = JSON.parse(row.data || '{}');
+      info.main_ingredient ||= canonMain(row.main || d.main_ingredient);
+      info.cuisine ||= canonCuisine(row.cuisine || d.cuisine);
+    }
+  }
+  return info;
+}
+
+async function replaceFromBank(env: Env, prefs: any, plan: DayPlan, others: any[], v: Variety, current: any) {
+  const rows = scoreCandidates(await bankCandidates(env, prefs, [plan.bankMode], 80), prefs, v);
+  const fits = rows.filter(c => fitsDay(c, plan) && !conflictReason(c, others, v) && capsOk(c, others, prefs) && !tooSimilar(c, current));
+  if (!fits.length) return null;
+  const pick = fits[Math.floor(Math.random() * Math.min(3, fits.length))];
+  const meal = (await loadMeals(env, [pick.id])).get(pick.id);
+  return meal ? { ...meal, mode: plan.mode } : null;
+}
+
+async function replaceMeal(env: Env, b: any, ctx?: Ctx) {
   const prefs = b.prefs || {};
-  const dayIndex = Number(b.dayIndex) || 0;
-  const currentTitle = b.currentMeal?.title || '';
+  const dayIndex = Math.min(6, Math.max(0, Number(b.dayIndex) || 0));
+  const current = await currentMealInfo(env, b.currentMeal);
   const week = list(prefs.currentWeek).length
     ? list(prefs.currentWeek)
     : list(prefs.currentWeekTitles).map((t: any) => ({ title: t }));
   const others = week.filter((_: any, i: number) => i !== dayIndex);
-  const meal = await generateOneMeal(env, prefs, dayIndex, others, buildVariety(b, prefs), b.favoriteTitles, currentTitle);
+  const v = buildVariety(b, prefs);
+
+  let meal: any = null;
+  if (bankUsable(prefs)) {
+    const vReplace = { ...v, blocked: [...v.blocked, current.title].filter(Boolean) };
+    meal = await replaceFromBank(env, prefs, dayPlans(prefs)[dayIndex], others, vReplace, current)
+      .catch(e => { console.warn('Vervangen uit de bank mislukt:', errMsg(e)); return null; });
+  }
+  if (!meal) meal = await generateOneMeal(env, prefs, dayIndex, others, v, b.favoriteTitles, current.title, current);
   await saveRecipes(env, [meal]);
+  background(ctx, () => prewarm(env, [meal], prefs));
   return meal;
 }
 
-/** Volledig recept: één keer gemaakt per gerecht, daarna uit de bank. Altijd voor BASE_SERVINGS personen. */
-async function fullRecipe(env: Env, b: any) {
-  const meal = b.meal || {};
-  let recipe = await findRecipe(env, meal.id, meal.title);
-  if (recipe?.details) {
-    const stored = JSON.parse(recipe.details);
-    if (stored.v === RECIPE_VERSION) return { ...stored, base_servings: BASE_SERVINGS };
-  }
+// ---------------------------------------------------------------------------
+// Volledige recepten: één keer gemaakt per gerecht, daarna uit de bank
+// ---------------------------------------------------------------------------
+const detailsInflight = new Map<string, Promise<any>>();
 
-  const summary = recipe ? JSON.parse(recipe.data || '{}') : meal;
+function storedDetails(row: any) {
+  if (!row?.details) return null;
+  try {
+    const s = JSON.parse(row.details);
+    return (Number(s.v) || 0) >= MIN_RECIPE_VERSION ? s : null;
+  } catch { return null; }
+}
+
+/** Volledig recept uit de bank, of één keer laten maken (gelijktijdige aanvragen wachten op dezelfde). */
+function ensureDetails(env: Env, row: any, opts: { language?: string; region?: string; meal?: any } = {}): Promise<any> {
+  const stored = storedDetails(row);
+  if (stored) return Promise.resolve(stored);
+  let p = detailsInflight.get(row.id);
+  if (!p) {
+    p = makeDetails(env, row, opts).finally(() => detailsInflight.delete(row.id));
+    detailsInflight.set(row.id, p);
+  }
+  return p;
+}
+
+async function makeDetails(env: Env, row: any, { language, region, meal }: { language?: string; region?: string; meal?: any }) {
+  const summary = { ...(meal || {}), ...JSON.parse(row.data || '{}') };
   const system = `Je bent een ervaren chef en schrijft een volledig, foutloos recept voor thuiskoks.
-Schrijf in het ${langName(b.language)}. Hoeveelheden voor ${BASE_SERVINGS} personen.
+Schrijf in het ${langName(language)}. Hoeveelheden voor ${BASE_SERVINGS} personen.
 ${RECIPE_RULES}
-${availabilityRules(b.region)}
+${availabilityRules(region)}
 ${TIMER_RULES}
 Antwoord uitsluitend met JSON in deze vorm: ${FULL_RECIPE_SHAPE}`;
-  const prompt = `Volledig recept voor: ${meal.title}. Modus: ${meal.mode || summary.mode || 'premium'}.
-Omschrijving: ${summary.short_description || meal.short_description || ''}`;
+  const prompt = `Volledig recept voor: ${row.title}. Modus: ${summary.mode || row.mode || 'premium'}.
+Omschrijving: ${summary.short_description || ''}`;
   let details: any;
   try {
-    details = await aiJson(env, system, prompt, 0.5, undefined, env.RECIPE_MODEL || DEFAULT_RECIPE_MODEL);
+    details = await aiJson(env, system, prompt, 0.5, undefined, env.RECIPE_MODEL || DEFAULT_RECIPE_MODEL,
+      { timeoutMs: 45000, retries: 0 });
   } catch (e) {
     // Beter model niet beschikbaar of druk: val terug op het standaardmodel.
-    console.error('Receptmodel mislukt, terugval op standaardmodel', e);
+    console.error('Receptmodel mislukt, terugval op standaardmodel', errMsg(e));
     details = await aiJson(env, system, prompt, 0.5);
   }
   const clean = {
     v: RECIPE_VERSION,
-    ingredients: list(details.ingredients),
+    ingredients: list(details.ingredients).map((i: any) => ({
+      name: String(i?.name || '').trim(), amount: Number(i?.amount) || 0, unit: String(i?.unit || '').trim(),
+      ...(SHOP_CATEGORIES.includes(i?.category) ? { category: i.category } : {}),
+    })).filter((i: any) => i.name),
     steps: list(details.steps).map((s: any, i: number) => ({ ...s, step_index: s.step_index ?? i + 1 })),
     supplies: list(details.supplies),
-    nutrition: details.nutrition || { calories: meal.calories_per_portion || 0 },
+    nutrition: details.nutrition || { calories: summary.calories_per_portion || 0 },
+    ...(details.chefs_hack ? { chefs_hack: details.chefs_hack } : {}),
     ...(details.plating_tips ? { plating_tips: details.plating_tips } : {}),
     ...(details.wine_pairing ? { wine_pairing: details.wine_pairing } : {}),
   };
+  await env.DB.prepare('UPDATE recipes SET details = ?, details_v = ? WHERE id = ?')
+    .bind(JSON.stringify(clean), RECIPE_VERSION, row.id).run();
+  return clean;
+}
 
-  if (!recipe && meal.title) {
-    await saveRecipes(env, [{ ...meal }]);
-    recipe = await findRecipe(env, undefined, meal.title);
+async function fullRecipe(env: Env, b: any) {
+  const meal = b.meal || {};
+  let row = await findRecipe(env, meal.id, meal.title);
+  if (!row) {
+    if (!meal.title) throw new ApiError(400, 'Geen gerecht opgegeven');
+    const [saved] = await saveRecipes(env, [{ ...meal, title: String(meal.title).trim() }]);
+    row = await findRecipe(env, saved.id);
   }
-  if (recipe) {
-    await env.DB.prepare('UPDATE recipes SET details = ? WHERE id = ?').bind(JSON.stringify(clean), recipe.id).run();
+  const details = await ensureDetails(env, row, { language: b.language, region: b.region, meal });
+  return { ...details, base_servings: BASE_SERVINGS };
+}
+
+/** Na een nieuw weekmenu alvast de volledige recepten maken, zodat openen en boodschappen direct gaan. */
+async function prewarm(env: Env, meals: any[], prefs: any) {
+  const ids = meals.filter(Boolean).map(m => m.id).filter(Boolean);
+  if (!ids.length) return;
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM recipes WHERE id IN (${ids.map(() => '?').join(',')}) AND details_v < ?`
+  ).bind(...ids, MIN_RECIPE_VERSION).all();
+  await Promise.allSettled((results || []).slice(0, 4).map((row: any) =>
+    ensureDetails(env, row, { language: prefs.language, region: prefs.region })));
+}
+
+// ---------------------------------------------------------------------------
+// Boodschappenlijst: optellen in code (betrouwbaar en direct), met winkelhoeveelheden
+// ---------------------------------------------------------------------------
+type UnitInfo = { kind: 'g' | 'ml' | 'spoon' | 'count' | 'taste'; mult: number; count?: string };
+
+const COUNT_UNIT: [RegExp, string][] = [
+  [/^(st|stk|stuks?|pieces?|piece|x)$/, 'stuk'], [/^(teen|tenen|teentjes?|cloves?)$/, 'teen'], [/^bosj?e?s?$/, 'bosje'],
+  [/^blik(ken|je|jes)?$/, 'blik'], [/^(pot|potten|potje|potjes)$/, 'pot'], [/^zakj?e?s?$/, 'zakje'],
+  [/^(takje|takjes|takken|tak)$/, 'takje'], [/^(plak|plakken|plakje|plakjes)$/, 'plak'], [/^(bol|bollen)$/, 'bol'],
+  [/^(pak|pakken|pakje|pakjes)$/, 'pak'], [/^(stengel|stengels)$/, 'stengel'], [/^(blaadje|blaadjes|blad)$/, 'blaadje'],
+];
+const PLURAL: Record<string, string> = { stuk: 'stuks', teen: 'tenen', bosje: 'bosjes', blik: 'blikken', pot: 'potten',
+  zakje: 'zakjes', takje: 'takjes', plak: 'plakken', bol: 'bollen', pak: 'pakken', stengel: 'stengels', blaadje: 'blaadjes',
+  eetlepel: 'eetlepels', theelepel: 'theelepels' };
+const unitName = (u: string, n: number) => (n > 1 ? PLURAL[u] || u : u);
+
+function unitInfo(unit: any): UnitInfo {
+  const u = normTitle(unit).replace(/ /g, '');
+  if (!u) return { kind: 'count', mult: 1, count: 'stuk' };
+  if (/^(g|gr|gram|grammen)$/.test(u)) return { kind: 'g', mult: 1 };
+  if (/^(kg|kilo|kilogram)$/.test(u)) return { kind: 'g', mult: 1000 };
+  if (/^(ml|milliliter)$/.test(u)) return { kind: 'ml', mult: 1 };
+  if (/^cl$/.test(u)) return { kind: 'ml', mult: 10 };
+  if (/^dl$/.test(u)) return { kind: 'ml', mult: 100 };
+  if (/^(l|liter)$/.test(u)) return { kind: 'ml', mult: 1000 };
+  if (/^(cup|cups|kop|kopje|kopjes)$/.test(u)) return { kind: 'ml', mult: 240 };
+  if (/^(el|eetlepels?|tbsp)$/.test(u)) return { kind: 'spoon', mult: 15 };
+  if (/^(tl|theelepels?|tsp)$/.test(u)) return { kind: 'spoon', mult: 5 };
+  if (/naarsmaak|snuf|scheut|beetje|handje|optioneel|mespunt|toetje|garnering/.test(u)) return { kind: 'taste', mult: 0 };
+  for (const [re, name] of COUNT_UNIT) if (re.test(u)) return { kind: 'count', mult: 1, count: name };
+  return { kind: 'count', mult: 1, count: u };
+}
+
+/** Naar boven afronden op een winkelmaat. */
+const roundUp = (n: number, step: number) => Math.ceil(n / step - 1e-9) * step;
+function shopGrams(g: number) {
+  if (g >= 1000) return { amount: Math.round(roundUp(g, 100) / 100) / 10, unit: 'kg' };
+  return { amount: g < 50 ? roundUp(g, 5) : g < 250 ? roundUp(g, 25) : roundUp(g, 50), unit: 'gram' };
+}
+function shopMl(ml: number) {
+  if (ml >= 1000) return { amount: Math.round(roundUp(ml, 100) / 100) / 10, unit: 'liter' };
+  return { amount: ml < 100 ? roundUp(ml, 10) : ml < 500 ? roundUp(ml, 50) : roundUp(ml, 100), unit: 'ml' };
+}
+
+const CATEGORY_GUESS: [RegExp, string][] = [
+  [/diepvries|bevroren/, 'Diepvries'],
+  [/rode peper|groene peper|chilipeper|jalapeno|verse gember|\bgember\b|lente ?ui|bosui|basilicum|peterselie|koriander|munt\b|bieslook|dille|dragon|kervel/, 'Groente & fruit'],
+  [/\bzout\b|zeezout|zwarte peper|witte peper|^peper|cayenne|komijn|paprikapoeder|kerrie|curry ?poeder|kaneel|nootmuskaat|oregano|gedroogde|kurkuma|garam|ras el|zaatar|sumak|kardemom|steranijs|vanille|chilivlok|kruidenmix|laurier|\btijm\b|rozemarijn|specerij|venkelzaad|mosterdzaad/, 'Kruiden & specerijen'],
+  [/olie|azijn|\bbloem\b|maizena|suiker|bakpoeder|\bgist\b|paneermeel|panko|cacao|chocola|zetmeel/, 'Olie, azijn & bakproducten'],
+  [/blik|tomatenpuree|passata|saus|bouillon|fond|kokosmelk|pesto|ketjap|sojasaus|mosterd|mayonaise|ketchup|kikkererwt|bonen|pindakaas|sambal|vissaus|tahin|honing|\bjam\b|olijven|kappertjes|siroop|wijn|curry ?pasta|miso/, 'Conserven & sauzen'],
+  [/melk|room|boter|kaas|yoghurt|kwark|\bei\b|eieren|creme|mascarpone|ricotta|mozzarella|feta|parmezaan|halloumi|burrata|zuivel/, 'Zuivel, kaas & eieren'],
+  [/kip|rund|varken|gehakt|spek|\bham\b|worst|\blam|biefstuk|zalm|\bvis\b|kabeljauw|garnal|tonijn|mossel|tofu|tempeh|filet|eend|kalkoen|chorizo|pancetta|haas|makreel|forel|inktvis|vlees|schnitzel|seitan/, 'Vlees, vis & vega'],
+  [/pasta|spaghetti|penne|rijst|noedel|noodle|\bmie\b|couscous|quinoa|bulgur|linzen|gnocchi|lasagne|tagliatelle|havermout|orzo|polenta/, 'Pasta, rijst & granen'],
+  [/brood|wrap|tortilla|pita|naan|stokbrood|ciabatta|croissant|bladerdeeg|deeg|broodje|crouton/, 'Brood & bakkerij'],
+  [/ui\b|uien|knoflook|tomaat|tomaten|paprika|courgette|aubergine|wortel|prei|kool|broccoli|spinazie|sla\b|rucola|komkommer|avocado|citroen|limoen|sinaasappel|appel|peer|aardappel|champignon|paddenstoel|bonen|pompoen|venkel|selderij|biet|asperge|mais|erwt|radijs|fruit|groente|bes|druif|mango|ananas|banaan|gember|peul|spruit|andijvie|witlof|postelein/, 'Groente & fruit'],
+];
+function guessCategory(name: string) {
+  const n = normTitle(name);
+  for (const [re, cat] of CATEGORY_GUESS) if (re.test(n)) return cat;
+  return 'Overig';
+}
+
+interface ShopAcc { name: string; category: string; g: number; ml: number; spoonMl: number; counts: Record<string, number> }
+
+function aggregateShopping(recipes: { details: any; factor: number }[]) {
+  const acc = new Map<string, ShopAcc>();
+  for (const { details, factor } of recipes) {
+    for (const ing of list(details?.ingredients)) {
+      const rawName = String(ing.name || '').trim();
+      const key = normTitle(rawName.replace(/\(.*?\)/g, ''));
+      if (!key) continue;
+      let a = acc.get(key);
+      if (!a) {
+        a = { name: rawName[0].toUpperCase() + rawName.slice(1), category: ing.category || guessCategory(rawName),
+              g: 0, ml: 0, spoonMl: 0, counts: {} };
+        acc.set(key, a);
+      }
+      const u = unitInfo(ing.unit);
+      const n = (Number(ing.amount) || 0) * u.mult * factor;
+      if (u.kind === 'g') a.g += n;
+      else if (u.kind === 'ml') a.ml += n;
+      else if (u.kind === 'spoon') a.spoonMl += n;
+      else if (u.kind === 'count' && n > 0) a.counts[u.count!] = (a.counts[u.count!] || 0) + n;
+    }
   }
-  return { ...clean, base_servings: BASE_SERVINGS };
+
+  const items: { name: string; amount: number; unit: string; category: string }[] = [];
+  for (const [key, a] of acc) {
+    const push = (amount: number, unit: string) => items.push({ name: a.name, amount, unit, category: a.category });
+    const before = items.length;
+    if (a.g > 0) { const r = shopGrams(a.g); push(r.amount, r.unit); }
+    if (a.ml > 0) { const r = shopMl(a.ml + a.spoonMl); push(r.amount, r.unit); }
+    else if (a.spoonMl > 0) {
+      // Kleine hoeveelheden (olie, sojasaus, specerijen): in lepels.
+      if (a.spoonMl >= 15) { const n = roundUp(a.spoonMl / 15, 1); push(n, unitName('eetlepel', n)); }
+      else { const n = roundUp(a.spoonMl / 5, 1); push(n, unitName('theelepel', n)); }
+    }
+    for (const [unit, total] of Object.entries(a.counts)) {
+      if (unit === 'teen' && /knoflook/.test(key)) { const n = roundUp(total / 10, 1); push(n, unitName('bol', n)); continue; }
+      const n = roundUp(total, 1);
+      push(n, unitName(unit, n));
+    }
+    if (items.length === before) push(0, ''); // zout, peper, naar smaak: alleen de naam
+  }
+  const order = (c: string) => { const i = SHOP_CATEGORIES.indexOf(c); return i < 0 ? 99 : i; };
+  items.sort((x, y) => order(x.category) - order(y.category) || x.name.localeCompare(y.name, 'nl'));
+  return items;
 }
 
 async function shoppingList(env: Env, b: any) {
-  const servings = Number(b.servings) || 2;
-  const lines: string[] = [];
-  for (const m of list(b.meals).slice(0, 14)) {
-    const recipe = await findRecipe(env, m.id, m.title);
-    const details = recipe?.details ? JSON.parse(recipe.details) : null;
-    if (details?.ingredients?.length) {
-      const factor = servings / BASE_SERVINGS;
-      const ing = details.ingredients.map((i: any) =>
-        `${Math.round((Number(i.amount) || 0) * factor * 10) / 10} ${i.unit} ${i.name}`).join('; ');
-      lines.push(`- ${m.title}: ${ing}`);
-    } else {
-      lines.push(`- ${m.title} (schat zelf de ingrediënten in)`);
-    }
-  }
-  const system = `Je maakt een boodschappenlijst in het ${langName(b.language)} voor ${servings} personen.
-Voeg dubbele ingrediënten samen, tel hoeveelheden op en rond af naar praktische winkelhoeveelheden.
-Gebruik supermarktcategorieën (bijv. Groente & fruit, Vlees & vis, Zuivel, Voorraad).
-Antwoord uitsluitend met een JSON-array: [{"name": "...", "amount": 0, "unit": "...", "category": "..."}]`;
-  const data = await aiJson(env, system, `Shopping list for:\n${lines.join('\n')}`, 0.2);
-  const items = Array.isArray(data) ? data : list(data.items);
-  return items.map((it: any, i: number) => ({
-    name: it.name || '', amount: Number(it.amount) || 0, unit: it.unit || '', category: it.category || '',
-    id: `it-${i}`, checked: false,
-  }));
+  const servings = Math.max(1, Number(b.servings) || 2);
+  const meals = list(b.meals).slice(0, 14);
+  const rows = await Promise.all(meals.map((m: any) => findRecipe(env, m.id, m.title)));
+  // Ontbrekende recepten tegelijk laten maken, zodat de lijst altijd klopt.
+  const details = await Promise.all(rows.map((row: any, i: number) => (row
+    ? ensureDetails(env, row, { language: b.language, region: b.region, meal: meals[i] })
+      .catch(e => { console.error('Recept voor boodschappenlijst mislukt:', row.title, errMsg(e)); return null; })
+    : Promise.resolve(null))));
+  const ok = details.filter(Boolean);
+  if (meals.length && !ok.length) throw new ApiError(503, 'De recepten konden nu niet geladen worden. Probeer het zo nog eens.');
+
+  const items: any[] = aggregateShopping(ok.map(d => ({ details: d, factor: servings / BASE_SERVINGS })));
+  meals.forEach((m: any, i: number) => {
+    if (!details[i]) items.push({ name: `${m.title || 'Gerecht'} (recept volgt, nog aanvullen)`, amount: 0, unit: '', category: 'Overig' });
+  });
+  return items.map((it, i) => ({ ...it, id: `it-${i}`, checked: false }));
 }
 
+// ---------------------------------------------------------------------------
+// Overige endpoints
+// ---------------------------------------------------------------------------
 async function analyzeFridge(env: Env, b: any) {
   if (!b.image) throw new ApiError(400, 'Geen foto ontvangen');
   const prefs = b.prefs || {};
@@ -579,8 +1305,7 @@ Dieet: ${joinOr(prefs.diet, 'Geen')}.
 ${availabilityRules(prefs.region)}
 Antwoord uitsluitend met JSON: {"recognizedItems": ["..."], "suggestions": [3 gerechten in deze vorm: ${MEAL_SHAPE}]}`;
   const data = await aiJson(env, system, 'Suggest 3 meals.', 0.6, b.image);
-  const suggestions = list(data.suggestions).slice(0, 3);
-  suggestions.forEach((m: any) => { m.mode = 'magic'; });
+  const suggestions = list(data.suggestions).slice(0, 3).map((m: any) => cleanMeal(m, 'magic'));
   await saveRecipes(env, suggestions);
   return { recognizedItems: list(data.recognizedItems), suggestions };
 }
@@ -594,10 +1319,11 @@ Je bent professioneel, kort en bondig. Antwoord in het ${langName(b.language)}.
 [USER_STATUS]: ${b.userStatus}
 [CURRENT_SCREEN]: ${b.currentView}
 [HUIDIG DIEET]: ${joinOr(b.diet, 'Geen')}
-Als de gebruiker duidelijk zijn dieet wil aanpassen, zet dan de volledige nieuwe lijst in "diet"; anders is "diet" null.
+Als de gebruiker duidelijk zijn dieet wil aanpassen, zet dan de volledige nieuwe lijst in "diet" (alleen waarden uit:
+${DIET_OPTIONS.join(', ')}; lege lijst = geen dieet); anders is "diet" null.
 Antwoord uitsluitend met JSON: {"reply": "...", "diet": null}`;
   const data = await aiJson(env, system, `${history}\nGebruiker: ${b.message || ''}`, 0.7);
-  return { reply: data.reply || '', diet: Array.isArray(data.diet) ? data.diet : null };
+  return { reply: data.reply || '', diet: Array.isArray(data.diet) ? canonDietList(data.diet) : null };
 }
 
 const SIGNAL_LABELS: Record<string, string> = {
@@ -634,18 +1360,108 @@ Antwoord uitsluitend met JSON: {"profile": "..."}`;
   return { profile: typeof data.profile === 'string' ? data.profile.slice(0, 1200) : previous };
 }
 
-async function serveImage(env: Env, name: string) {
-  const obj = await env.PHOTOS.get(`meals/${name}`);
-  if (!obj) return new Response('Niet gevonden', { status: 404 });
-  return new Response(obj.body, {
-    headers: { 'content-type': 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable' },
-  });
+// ---------------------------------------------------------------------------
+// Receptenbank vooraf vullen (cron elke 20 minuten, of handmatig via /api/admin/seed)
+// ---------------------------------------------------------------------------
+const SEED_BATCH = 8;
+const SEED_CATEGORIES = [
+  { id: 'hollands', mode: 'premium', target: 35, brief: 'Hollandse en Belgische huiskeuken en Noord-Europese klassiekers (stamppot, ovenschotels, soepen, stoofpotten, Noordzeevis), modern en gezond uitgevoerd' },
+  { id: 'europees', mode: 'premium', target: 35, brief: 'Italiaanse, Franse, Spaanse en Griekse gerechten voor doordeweeks' },
+  { id: 'wereld', mode: 'premium', target: 40, brief: 'toegankelijke wereldkeuken: Indiaas, Thais, Chinees, Japans, Koreaans, Vietnamees, Indonesisch, Mexicaans, Midden-Oosters, Marokkaans' },
+  { id: 'kind', mode: 'premium', target: 30, brief: 'kindvriendelijk: milde smaken (niet pittig), herkenbare ingrediënten, ook lekker voor ouders; kid_friendly true' },
+  { id: 'vega', mode: 'premium', target: 40, brief: 'vegetarisch (ongeveer een derde ook vegan), vol van smaak en voedzaam' },
+  { id: 'snel', mode: 'premium', target: 30, brief: 'snel: klaar in hoogstens 20 minuten, weinig afwas' },
+  { id: 'vis', mode: 'premium', target: 25, brief: 'vis en zeevruchten, gevarieerde vissoorten' },
+  { id: 'culinair', mode: 'culinary', target: 30, brief: 'klassieke Franse en Europese haute cuisine voor het weekend' },
+  { id: 'culinair_wereld', mode: 'culinary', target: 25, brief: 'verfijnde wereldkeuken (Japans, Thais, Midden-Oosters, Peruaans, Koreaans)' },
+  { id: 'culinair_vega', mode: 'culinary', target: 20, brief: 'verfijnde vegetarische gerechten' },
+];
+
+async function seedNewMeals(env: Env) {
+  const { results } = await env.DB.prepare(
+    'SELECT seed_cat, COUNT(*) AS n FROM recipes WHERE seed_cat IS NOT NULL GROUP BY seed_cat').all();
+  const counts: Record<string, number> = {};
+  for (const r of results || []) counts[r.seed_cat] = Number(r.n) || 0;
+  const open = SEED_CATEGORIES.filter(c => (counts[c.id] || 0) < c.target)
+    .sort((a, c) => (counts[a.id] || 0) / a.target - (counts[c.id] || 0) / c.target);
+  const cat = open[0];
+  if (!cat) return { category: null, added: 0 };
+
+  const { results: existing } = await env.DB.prepare('SELECT title, seed_cat FROM recipes WHERE mode = ?').bind(cat.mode).all();
+  const titles = (existing || []).map((r: any) => r.title);
+  const sameCat = (existing || []).filter((r: any) => r.seed_cat === cat.id).map((r: any) => r.title).slice(-80);
+  const system = `Je vult de receptenbank van Qook (KOOQ), een kook-app voor Nederland en België.
+Bedenk ${SEED_BATCH} NIEUWE, uiteenlopende gerechten in de categorie: ${cat.brief}.
+Modus: ${cat.mode}. Schrijf in het Nederlands (ai_image_prompt in het Engels).
+${MODE_RULES}
+${availabilityRules('NL')}
+- Varieer in hoofdingrediënt, keuken en bereidingswijze. Realistische kooktijden.
+- Al in deze categorie (niet herhalen, ook geen varianten): ${joinOr(sameCat, 'nog niets')}.
+Antwoord uitsluitend met JSON: {"meals": [${SEED_BATCH} gerechten in deze vorm: ${MEAL_SHAPE}]}`;
+  const data = await aiJson(env, system, `Bedenk ${SEED_BATCH} nieuwe gerechten.`, 1.0, undefined, undefined, { timeoutMs: 60000 });
+  const known = dupMatcher(titles);
+  const fresh: any[] = [];
+  for (const raw of list(data.meals)) {
+    const m = cleanMeal(raw, cat.mode);
+    if (!m.title || known(m.title) || isDuplicate(m.title, fresh.map(f => f.title))) continue;
+    fresh.push(m);
+  }
+  await saveRecipes(env, fresh, cat.id);
+  return { category: cat.id, added: fresh.length };
+}
+
+async function seedRound(env: Env, opts: { details?: number; images?: number } = {}) {
+  await ensureSchema(env);
+  const nDetails = opts.details ?? (Number(env.SEED_DETAILS_PER_RUN) >= 0 ? Number(env.SEED_DETAILS_PER_RUN) : 2);
+  const nImages = opts.images ?? (Number(env.SEED_IMAGES_PER_RUN) >= 0 ? Number(env.SEED_IMAGES_PER_RUN) : 1);
+  const stats: any = { category: null, added: 0, details: 0, images: 0, errors: [] as string[] };
+  let geminiOk = true;
+
+  // 1. Nieuwe gerechten voor de categorie die het verst achterloopt.
+  try {
+    Object.assign(stats, await seedNewMeals(env));
+  } catch (e: any) {
+    stats.errors.push(`gerechten: ${errMsg(e)}`);
+    if (e?.status === 429) geminiOk = false;
+  }
+
+  // 2. Volledige recepten (meest gebruikte gerechten eerst).
+  if (geminiOk && nDetails > 0) {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM recipes WHERE details_v < ? AND mode IN ('premium', 'culinary')
+       ORDER BY uses DESC, created_at LIMIT ?`).bind(MIN_RECIPE_VERSION, nDetails).all();
+    const done = await Promise.allSettled((results || []).map((row: any) => ensureDetails(env, row, { language: 'nl', region: 'NL' })));
+    stats.details = done.filter(d => d.status === 'fulfilled').length;
+    for (const d of done) if (d.status === 'rejected') stats.errors.push(`recept: ${errMsg(d.reason)}`);
+  }
+
+  // 3. Foto's (Workers AI heeft een eigen dagbudget; daarom weinig per ronde).
+  if (nImages > 0) {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM recipes WHERE has_image = 0 AND mode IN ('premium', 'culinary')
+       ORDER BY uses DESC, created_at LIMIT ?`).bind(nImages).all();
+    const done = await Promise.allSettled((results || []).map((row: any) => imageOnce(env, row)));
+    stats.images = done.filter(d => d.status === 'fulfilled').length;
+    for (const d of done) if (d.status === 'rejected') stats.errors.push(`foto: ${errMsg(d.reason)}`);
+  }
+  return stats;
+}
+
+async function bankStats(env: Env) {
+  const r = await env.DB.prepare(`SELECT COUNT(*) AS total,
+      SUM(CASE WHEN details_v >= ? THEN 1 ELSE 0 END) AS with_recipe,
+      SUM(has_image) AS with_photo,
+      SUM(CASE WHEN seed_cat IS NOT NULL THEN 1 ELSE 0 END) AS seeded
+    FROM recipes`).bind(MIN_RECIPE_VERSION).first();
+  return { total: Number(r?.total) || 0, with_recipe: Number(r?.with_recipe) || 0,
+           with_photo: Number(r?.with_photo) || 0, seeded: Number(r?.seeded) || 0,
+           seed_target: SEED_CATEGORIES.reduce((s, c) => s + c.target, 0) };
 }
 
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
-const POST_ROUTES: Record<string, (env: Env, body: any) => Promise<any>> = {
+const POST_ROUTES: Record<string, (env: Env, body: any, ctx?: Ctx) => Promise<any>> = {
   '/api/weekly-plan': weeklyPlan,
   '/api/replace-meal': replaceMeal,
   '/api/full-recipe': fullRecipe,
@@ -657,13 +1473,13 @@ const POST_ROUTES: Record<string, (env: Env, body: any) => Promise<any>> = {
 };
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: Ctx): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
 
     try {
       if (request.method === 'GET' && path.startsWith('/api/images/')) {
-        return serveImage(env, path.slice('/api/images/'.length));
+        return await serveImage(env, path.slice('/api/images/'.length), ctx);
       }
       if (request.method === 'GET' && path === '/api/health') {
         await ensureSchema(env);
@@ -673,12 +1489,20 @@ export default {
           recipe_model: env.RECIPE_MODEL || DEFAULT_RECIPE_MODEL,
           gemini_key: env.GEMINI_API_KEY ? 'ingesteld' : 'ONTBREEKT',
           database: 'ok',
+          images: env.IMAGES ? 'webp' : 'origineel',
+          recipe_bank: await bankStats(env),
         });
+      }
+      if (request.method === 'POST' && path === '/api/admin/seed') {
+        if (!env.ADMIN_KEY || request.headers.get('x-admin-key') !== env.ADMIN_KEY) return json({ detail: 'Niet gevonden' }, 404);
+        const body: any = await request.json().catch(() => ({}));
+        const stats = await seedRound(env, { details: body.details, images: body.images });
+        return json({ ...stats, recipe_bank: await bankStats(env) });
       }
       const handler = POST_ROUTES[path];
       if (request.method === 'POST' && handler) {
         const body = await request.json().catch(() => ({}));
-        return json(await handler(env, body));
+        return json(await handler(env, body, ctx));
       }
       return json({ detail: 'Niet gevonden' }, 404);
     } catch (e: any) {
@@ -686,5 +1510,11 @@ export default {
       if (status >= 500 || status === 429) console.error(path, e?.stack || e);
       return json({ detail: e instanceof ApiError ? e.message : 'Er ging iets mis op de server' }, status);
     }
+  },
+
+  /** Geplande taak: receptenbank aanvullen. */
+  async scheduled(_controller: any, env: Env, ctx: Ctx) {
+    const run = seedRound(env).then(s => console.log('Receptenbank aangevuld:', JSON.stringify(s)));
+    if (ctx?.waitUntil) ctx.waitUntil(run); else await run;
   },
 };

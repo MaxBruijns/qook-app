@@ -90,7 +90,7 @@ export const MealDetail: React.FC<Props> = ({
                      <h1 className="text-4xl font-sans font-black tracking-tighter leading-none mb-2">{meal.title}</h1>
                      <div className="flex items-center gap-4 opacity-70 text-xs font-sans font-black">
                         <span className="flex items-center gap-1.5"><Clock size={14} /> {meal.estimated_time_minutes} {t.unit_min}</span>
-                        <span className="flex items-center gap-1.5"><Users size={14} /> {fullMeal.servings} {t.adults.toLowerCase()}</span>
+                        <span className="flex items-center gap-1.5"><Users size={14} /> {fullMeal.servings} {t.persons}</span>
                      </div>
                 </div>
             </div>
