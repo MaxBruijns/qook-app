@@ -191,7 +191,10 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
   const [reportDismissedFor, setReportDismissedFor] = useState<string | null>(null);
   
   const isCulinarySubscriber = userStatus === 'culinary';
-  const isTrialActive = (userStatus === 'free') || (userStatus === 'basic' && !!trialStartedAt);
+  // Proefperiode = 14 dagen Premium (gerechten uit de receptenbank).
+  const inTrial = userStatus === 'premium' && !!trialStartedAt;
+  const trialDaysLeft = inTrial ? Math.max(0, 14 - Math.floor((Date.now() - new Date(trialStartedAt!).getTime()) / 864e5)) : 0;
+  const isTrialActive = (userStatus === 'free') || inTrial;
   const isVisitor = userStatus === 'free';
   const hasPayingStatus = userStatus === 'premium' || userStatus === 'culinary' || userStatus === 'basic';
 
@@ -214,15 +217,15 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
                     <Sparkles size={24} />
                 </div>
                 <div>
-                    <h3 className="text-lg font-sans font-black text-kooq-dark tracking-tighter leading-tight">{isVisitor ? t.discover_free : t.trial_active_badge}</h3>
+                    <h3 className="text-lg font-sans font-black text-kooq-dark tracking-tighter leading-tight">{isVisitor ? t.discover_free : `${t.trial_active_badge} · ${t.trial_days_left.replace('{n}', String(trialDaysLeft))}`}</h3>
                     <p className="text-[10px] font-sans font-black text-kooq-slate uppercase tracking-widest opacity-70">{t.premium_features_limit}</p>
                 </div>
             </div>
             <div className="flex gap-4">
-                <div className="bg-white px-5 py-3 rounded-2xl shadow-sm border border-kooq-slate/5 text-center min-w-[120px]">
+                {isVisitor && <div className="bg-white px-5 py-3 rounded-2xl shadow-sm border border-kooq-slate/5 text-center min-w-[120px]">
                     <span className="block text-[8px] font-sans font-black text-kooq-slate uppercase tracking-widest mb-1">{t.replacements_label}</span>
                     <span className="text-xl font-sans font-black text-kooq-dark tracking-tighter">{Math.max(0, 3 - usage.replacements)} <span className="text-xs opacity-40">{t.remaining}</span></span>
-                </div>
+                </div>}
                 <div className="bg-white px-5 py-3 rounded-2xl shadow-sm border border-kooq-slate/5 text-center min-w-[120px]">
                     <span className="block text-[8px] font-sans font-black text-kooq-slate uppercase tracking-widest mb-1">{t.scans_label}</span>
                     <span className="text-xl font-sans font-black text-kooq-dark tracking-tighter">{Math.max(0, 1 - usage.scans)} <span className="text-xs opacity-40">{t.remaining}</span></span>

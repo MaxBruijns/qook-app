@@ -146,7 +146,7 @@ export const Header: React.FC<{
     
     if (subscriptionStatus === 'premium') {
         statusStyle = 'bg-kooq-dark text-white border-kooq-dark shadow-md';
-        statusLabel = "PREMIUM";
+        statusLabel = trialStartedAt ? "PROEF PREMIUM" : "PREMIUM";
     } else if (subscriptionStatus === 'culinary') {
         statusStyle = 'bg-kooq-clementine text-white border-kooq-clementine shadow-md';
         statusLabel = "CULINAIR";
