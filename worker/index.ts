@@ -1352,7 +1352,7 @@ function guessCategory(name: string) {
   return 'Overig';
 }
 
-interface ShopAcc { name: string; category: string; g: number; ml: number; spoonMl: number; counts: Record<string, number> }
+interface ShopAcc { name: string; category: string; g: number; ml: number; spoonMl: number; counts: Record<string, number>; days: Set<number> }
 
 /** Wat de meeste mensen al in huis hebben: apart onderaan, zodat je niet dubbel koopt. */
 const PANTRY_CATEGORY = 'Voorraadkast: heb je dit nog in huis?';
@@ -1360,9 +1360,9 @@ const PANTRY_CATS = new Set(['Kruiden & specerijen', 'Olie, azijn & bakproducten
 const isPantry = (a: ShopAcc) => PANTRY_CATS.has(a.category)
   || (a.g === 0 && a.ml === 0 && !Object.keys(a.counts).length && a.category === 'Conserven & sauzen');
 
-function aggregateShopping(recipes: { details: any; factor: number }[]) {
+function aggregateShopping(recipes: { details: any; factor: number; day?: number }[]) {
   const acc = new Map<string, ShopAcc>();
-  for (const { details, factor } of recipes) {
+  for (const { details, factor, day } of recipes) {
     for (const ing of list(details?.ingredients)) {
       const rawName = String(ing.name || '').trim();
       const key = normTitle(rawName.replace(/\(.*?\)/g, ''));
@@ -1370,9 +1370,10 @@ function aggregateShopping(recipes: { details: any; factor: number }[]) {
       let a = acc.get(key);
       if (!a) {
         a = { name: rawName[0].toUpperCase() + rawName.slice(1), category: ing.category || guessCategory(rawName),
-              g: 0, ml: 0, spoonMl: 0, counts: {} };
+              g: 0, ml: 0, spoonMl: 0, counts: {}, days: new Set() };
         acc.set(key, a);
       }
+      if (typeof day === 'number') a.days.add(day);
       const u = unitInfo(ing.unit);
       const n = (Number(ing.amount) || 0) * u.mult * factor;
       if (u.kind === 'g') a.g += n;
@@ -1382,10 +1383,12 @@ function aggregateShopping(recipes: { details: any; factor: number }[]) {
     }
   }
 
-  const items: { name: string; amount: number; unit: string; category: string }[] = [];
+  const items: { name: string; amount: number; unit: string; category: string; used_in?: number[] }[] = [];
   for (const [key, a] of acc) {
     const category = isPantry(a) ? PANTRY_CATEGORY : a.category;
-    const push = (amount: number, unit: string) => items.push({ name: a.name, amount, unit, category });
+    // In welke dagen dit terugkomt (alleen zinvol bij meer dan één gerecht): "ma · do".
+    const usedIn = a.days.size > 1 && category !== PANTRY_CATEGORY ? [...a.days].sort((x, y) => x - y) : undefined;
+    const push = (amount: number, unit: string) => items.push({ name: a.name, amount, unit, category, ...(usedIn ? { used_in: usedIn } : {}) });
     const before = items.length;
     if (a.g > 0) { const r = shopGrams(a.g); push(r.amount, r.unit); }
     if (a.ml > 0) { const r = shopMl(a.ml + a.spoonMl); push(r.amount, r.unit); }
@@ -1418,7 +1421,8 @@ async function shoppingList(env: Env, b: any, _ctx?: Ctx, actor?: Actor) {
   const ok = details.filter(Boolean);
   if (meals.length && !ok.length) throw new ApiError(503, 'De recepten konden nu niet geladen worden. Probeer het zo nog eens.');
 
-  const items: any[] = aggregateShopping(ok.map(d => ({ details: d, factor: servings / BASE_SERVINGS })));
+  const dayOf = (m: any) => (Number.isInteger(m?.day) && m.day >= 0 && m.day <= 6 ? m.day : undefined);
+  const items: any[] = aggregateShopping(details.map((d: any, i: number) => (d ? { details: d, factor: servings / BASE_SERVINGS, day: dayOf(meals[i]) } : null)).filter(Boolean) as any);
   // Hoeveel ingrediënten in meer dan één gerecht terugkomen: voor "zoveel hergebruik" in de proefbanner.
   if (actor) await recordMilestone(env.DB, actor.who, 'reused',
     countReused(ok.map((d: any) => list(d.ingredients).map((i: any) => String(i.name || ''))))).catch(() => {});

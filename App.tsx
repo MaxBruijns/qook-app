@@ -655,7 +655,7 @@ export default function App() {
             onMealSelect={(m: Meal) => { setSelectedMeal(m); setView('meal-detail'); }} 
             selectedMealIds={selectedMealIds} 
             onToggleShopItem={toggleShopItem} 
-            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); bumpStat('lists'); if (inTrial && firstTime('qook_moment_first_list')) notify(t.moment_first_list, 'success'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
+            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.map((m, i) => ({ ...m, dayIndex: i })).filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); bumpStat('lists'); if (inTrial && firstTime('qook_moment_first_list')) notify(t.moment_first_list, 'success'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
             onReplaceMeal={async (oldMeal: Meal, dayIndex: number) => { 
                 if (userStatus === 'free' || userStatus === 'basic') {
                     if (usage.replacements >= 3) { 

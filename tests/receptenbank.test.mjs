@@ -48,6 +48,15 @@ assert.deepEqual([S.Komijn.amount, S.Komijn.unit, S.Komijn.category], [1, 'theel
 assert.equal(S.Olijfolie.category, 'Voorraadkast: heb je dit nog in huis?');
 assert.equal(S.Kokosmelk.category, 'Conserven & sauzen', 'blik/pak kopen: gewoon op de lijst');
 assert.equal(shop.at(-1).category, 'Voorraadkast: heb je dit nog in huis?', 'voorraadkast onderaan');
+// Restjes: in welke dagen een ingrediënt terugkomt
+const withDays = aggregateShopping([
+  { factor: 1, day: 0, details: { ingredients: [{ name: 'Bloemkool', amount: 1, unit: 'stuk' }, { name: 'Zalm', amount: 300, unit: 'gram' }, { name: 'Zout', amount: 0, unit: 'naar smaak' }] } },
+  { factor: 1, day: 3, details: { ingredients: [{ name: 'bloemkool', amount: 0.5, unit: 'stuk' }, { name: 'Zout', amount: 0, unit: 'naar smaak' }] } },
+]);
+const D = Object.fromEntries(withDays.map(i => [i.name, i]));
+assert.deepEqual(D.Bloemkool.used_in, [0, 3]); assert.equal(D.Bloemkool.amount, 2, '1,5 bloemkool -> 2 kopen');
+assert.equal(D.Zalm.used_in, undefined, 'maar in één gerecht');
+assert.equal(D.Zout.used_in, undefined, 'voorraadkast niet');
 assert.deepEqual([S.Zout.amount, S.Zout.unit], [0, '']);
 assert.equal(shop[0].category, 'Groente & fruit', 'gesorteerd op winkelvolgorde');
 assert.ok(shop.findIndex(i => i.name === 'Kipfilet') < shop.findIndex(i => i.name === 'Kokosmelk'));

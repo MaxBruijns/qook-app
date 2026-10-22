@@ -116,6 +116,7 @@ export interface ShoppingItem {
   unit: string;
   category: string;
   checked: boolean;
+  used_in?: number[];   // dagen (0-6) waarin dit ingrediënt terugkomt
 }
 
 export interface FridgeScanResult {

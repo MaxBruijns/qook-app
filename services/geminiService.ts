@@ -186,7 +186,7 @@ export const generateFullRecipe = async (meal: Meal, prefs: UserPreferences): Pr
 // --- BOODSCHAPPENLIJST ----------------------------------------------------
 export const generateShoppingList = async (meals: Meal[], prefs: UserPreferences): Promise<ShoppingItem[]> => {
   return post('/shopping-list', {
-    meals: meals.map(m => ({ id: m.id, title: m.title })),
+    meals: meals.map(m => ({ id: m.id, title: m.title, day: (m as any).dayIndex })),
     servings: servingsOf(prefs),
     language: prefs?.language || 'nl-NL',
     region: prefs?.region || 'NL',
