@@ -4,6 +4,7 @@ import { UserPreferences, Region, Diet, Budget, CookingTime, DayMode } from '../
 import { Button } from './Shared';
 import { X, Trash2, Heart, Check, Minus, Plus, Leaf, Users, Layout, Utensils, Clock, Banknote, Globe, Languages, MapPin, Lock, Stethoscope, Target, Zap, Settings, ChevronRight, Wine, Wand2, Crown, AlertTriangle, ChevronDown } from 'lucide-react';
 import { useTranslation, getSortedKitchenProfiles } from '../utils/i18n';
+import { getTasteState, setTasteProfile, clearTaste } from '../utils/tasteProfile';
 
 interface Props {
   isOpen: boolean;
@@ -88,12 +89,25 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
   const { t } = useTranslation(preferences.language);
   const [localPrefs, setLocalPrefs] = useState<UserPreferences>(preferences);
   const [showWarning, setShowWarning] = useState(false);
+  // Smaakprofiel: wat Qook geleerd heeft uit eerdere keuzes.
+  const [tasteText, setTasteText] = useState('');
+  const [tasteSignals, setTasteSignals] = useState(0);
 
   useEffect(() => {
     if (isOpen) {
         setLocalPrefs(preferences);
+        const taste = getTasteState();
+        setTasteText(taste.profile);
+        setTasteSignals(taste.events.length);
     }
   }, [preferences, isOpen]);
+
+  const handleClearTaste = () => {
+    if (!confirm(t.taste_confirm_clear)) return;
+    clearTaste();
+    setTasteText('');
+    setTasteSignals(0);
+  };
 
   if (!isOpen) return null;
 
@@ -215,6 +229,31 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                     </div>
                 </Section>
              )}
+
+             <Section title={t.taste_title} icon={Wand2}>
+                <div className="bg-white/60 backdrop-blur-md p-6 rounded-3xl border border-kooq-slate/10 shadow-inner space-y-4">
+                    <p className="text-[11px] text-kooq-slate font-medium leading-relaxed opacity-70">{t.taste_desc}</p>
+                    {tasteText || tasteSignals > 0 ? (
+                        <>
+                            <textarea
+                                value={tasteText}
+                                onChange={(e) => setTasteText(e.target.value)}
+                                onBlur={() => setTasteProfile(tasteText)}
+                                rows={5}
+                                placeholder={t.taste_pending}
+                                className="w-full bg-white border border-kooq-slate/10 rounded-2xl p-4 text-xs text-kooq-dark font-medium leading-relaxed outline-none focus:ring-2 focus:ring-kooq-sage/20 resize-none"
+                            />
+                            <div className="flex items-center justify-between gap-4">
+                                <span className="text-[9px] font-sans font-black text-kooq-slate uppercase tracking-widest">{tasteSignals} {t.taste_signals}</span>
+                                <button onClick={handleClearTaste} className="flex items-center gap-2 text-red-500 hover:text-red-600 text-[9px] font-sans font-black uppercase tracking-widest"><Trash2 size={14} /> {t.taste_clear}</button>
+                            </div>
+                        </>
+                    ) : (
+                        <p className="text-xs font-sans font-black text-kooq-sage">{t.taste_empty}</p>
+                    )}
+                    <p className="text-[9px] text-kooq-slate/60 font-medium leading-relaxed">{t.taste_privacy}</p>
+                </div>
+             </Section>
 
              <Section title={t.people} icon={Users}>
                 <div className="grid grid-cols-1 gap-3">

@@ -1,0 +1,18 @@
+// KOOQ — Cloudflare Worker die zowel de website als de API (/api/*) serveert.
+{
+  "name": "kooq",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  // Receptenbank. Wordt bij de eerste deploy automatisch aangemaakt als hij nog niet bestaat.
+  "d1_databases": [{ "binding": "DB", "database_name": "kooq-db" }],
+  // Maaltijdfoto's.
+  "r2_buckets": [{ "binding": "PHOTOS", "bucket_name": "kooq-photos" }],
+  // Workers AI voor de foto's (geen sleutel nodig).
+  "ai": { "binding": "AI" },
+  "observability": { "enabled": true }
+}

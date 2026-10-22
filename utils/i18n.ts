@@ -169,6 +169,14 @@ export const translations = {
     region: "Land",
     language: "Taal",
     reset: "Voorkeuren Wissen",
+    taste_title: "Jouw smaak",
+    taste_desc: "Qook leert van je keuzes: duimpjes na het koken, favorieten, gerechten die je kookt of op je boodschappenlijst zet, en gerechten die je vervangt. Zo sluit elk nieuw weekmenu beter aan. Je kunt het profiel hieronder aanpassen.",
+    taste_empty: "Nog niets geleerd. Geef een duimpje na het koken of bewaar een favoriet, dan begint Qook je smaak te leren.",
+    taste_pending: "Je profiel wordt bij het volgende weekmenu samengesteld.",
+    taste_signals: "keuzes meegewogen",
+    taste_clear: "Smaakprofiel wissen",
+    taste_confirm_clear: "Weet je zeker dat je je smaakprofiel en alle keuzes waaruit het is opgebouwd wilt wissen?",
+    taste_privacy: "Je smaakprofiel bevat alleen culinaire voorkeuren en staat op dit apparaat.",
     confirm_reset: "Weet je zeker dat je alle voorkeuren wilt wissen? Dit kan niet ongedaan worden gemaakt."
   },
   'en-US': {
@@ -338,6 +346,14 @@ export const translations = {
     region: "Country",
     language: "Language",
     reset: "Clear Preferences",
+    taste_title: "Your taste",
+    taste_desc: "Qook learns from your choices: thumbs after cooking, favourites, dishes you cook or add to your shopping list, and dishes you replace. That way every new weekly menu fits you better. You can edit the profile below.",
+    taste_empty: "Nothing learned yet. Give a thumbs up after cooking or save a favourite and Qook will start learning your taste.",
+    taste_pending: "Your profile will be put together with the next weekly menu.",
+    taste_signals: "choices taken into account",
+    taste_clear: "Clear taste profile",
+    taste_confirm_clear: "Are you sure you want to clear your taste profile and all the choices it is based on?",
+    taste_privacy: "Your taste profile only contains culinary preferences and is stored on this device.",
     confirm_reset: "Are you sure you want to clear all preferences? This cannot be undone."
   }
 };

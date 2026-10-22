@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, X, MessageCircle, Sparkles, Activity, Target, Layout, ChevronRight } from 'lucide-react';
-import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
 import { ChatMessage, UserPreferences, WeeklyPlan } from '../types';
 import { useTranslation } from '../utils/i18n';
+import { sendChatMessage } from '../services/geminiService';
 
 interface Props {
   userPrefs: UserPreferences;
@@ -16,18 +16,6 @@ interface Props {
   onUnlock: () => void;
   hasBottomAction?: boolean;
 }
-
-const updatePrefsTool: FunctionDeclaration = {
-  name: 'updateUserPreferences',
-  parameters: {
-    type: Type.OBJECT,
-    description: 'Update kookvoorkeuren of stel doelen in.',
-    properties: {
-      diet: { type: Type.ARRAY, items: { type: Type.STRING } },
-      newMealRequest: { type: Type.STRING }
-    }
-  }
-};
 
 export const ChatAssistant: React.FC<Props> = ({ userPrefs, currentPlan, userStatus, onUpdatePrefs, onShowPaywall, currentView, onSetStatus, onUnlock, hasBottomAction }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -101,43 +89,24 @@ export const ChatAssistant: React.FC<Props> = ({ userPrefs, currentPlan, userSta
     setLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const systemInstruction = `
-        Je bent de culinaire motor achter de Qook-app. 
-        Je plant weekmenu's en fungeert als een intelligente Sous-chef. 
-        Je bent professioneel, kort en bondig.
-        [USER_STATUS]: ${userStatus}
-        [CURRENT_SCREEN]: ${currentView}
-      `;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: [
-            ...messages.map(m => ({ role: m.sender === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] })),
-            { role: 'user', parts: [{ text: messageText }] }
-        ],
-        config: { systemInstruction, tools: [{ functionDeclarations: [updatePrefsTool] }] }
+      // De chat loopt via de backend; de AI-sleutel staat alleen op de server.
+      const result = await sendChatMessage({
+        messages: messages.map(m => ({ sender: m.sender, text: m.text })),
+        message: messageText,
+        userStatus,
+        currentView,
+        language: userPrefs.language || 'nl-NL',
+        diet: userPrefs.diet || [],
       });
 
-      const responseText = response.text || "";
-
-      if (response.functionCalls) {
-        for (const call of response.functionCalls) {
-            if (call.name === 'updateUserPreferences') {
-                const args = call.args as any;
-                const updatedPrefs = { ...userPrefs };
-                if (args.diet) updatedPrefs.diet = args.diet;
-                onUpdatePrefs(updatedPrefs, false);
-                setMessages(prev => [...prev, { 
-                    id: Date.now().toString(), 
-                    sender: 'assistant', 
-                    text: "Begrepen! Ik heb je voorkeuren bijgewerkt." 
-                }]);
-            }
-        }
-      } else {
-        setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'assistant', text: responseText }]);
+      if (result.diet && Array.isArray(result.diet)) {
+        onUpdatePrefs({ ...userPrefs, diet: result.diet }, false);
       }
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        sender: 'assistant',
+        text: result.reply || "Begrepen! Ik heb je voorkeuren bijgewerkt."
+      }]);
     } catch (e) {
       setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'assistant', text: "Er ging iets mis. Probeer het later opnieuw." }]);
     } finally {
