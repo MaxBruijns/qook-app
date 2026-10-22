@@ -36,4 +36,4 @@ npm run dev                 # website op poort 3000, /api gaat naar de backend
 
 ## Optioneel
 
-- `TEXT_MODEL` (variabele): ander Gemini-model, standaard `gemini-2.5-flash`.
+- `TEXT_MODEL` (variabele): ander Gemini-model, standaard `gemini-3.5-flash-lite` (alternatief: `gemini-3.8-flash`, beter maar duurder).
