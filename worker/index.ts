@@ -536,7 +536,8 @@ UITLEG VELDEN:
   linzen = peulvruchten. Vegetarisch zonder duidelijk eiwit: groenten, pasta, rijst of aardappel.
 - kid_friendly: true als kinderen van 4-12 jaar het lusten: mild (niet pittig), geen alcohol, herkenbaar.`;
 
-const SHOP_CATEGORIES = ['Groente & fruit', 'Vlees, vis & vega', 'Zuivel, kaas & eieren', 'Brood & bakkerij',
+/** In de looproute van een gemiddelde Nederlandse supermarkt: groente bij de ingang, diepvries als laatste. */
+const SHOP_CATEGORIES = ['Groente & fruit', 'Brood & bakkerij', 'Vlees, vis & vega', 'Zuivel, kaas & eieren',
   'Pasta, rijst & granen', 'Conserven & sauzen', 'Kruiden & specerijen', 'Olie, azijn & bakproducten', 'Diepvries', 'Overig'];
 
 const FULL_RECIPE_SHAPE = `{
