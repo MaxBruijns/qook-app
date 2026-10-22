@@ -22,6 +22,18 @@ function getWeekNumber(d: Date) {
     return weekNo;
 }
 
+// Voorraadkast op de boodschappenlijst: wat je afvinkt ("heb ik al"), onthouden we voor de volgende keer.
+const PANTRY_KEY = 'qook_pantry_have';
+const isPantryItem = (i: ShoppingItem) => i.category?.startsWith('Voorraadkast');
+const pantryHave = (): string[] => { try { return JSON.parse(localStorage.getItem(PANTRY_KEY) || '[]'); } catch { return []; } };
+const rememberPantry = (name: string, have: boolean) => {
+    const key = name.toLowerCase();
+    const next = pantryHave().filter(n => n !== key);
+    if (have) next.push(key);
+    try { localStorage.setItem(PANTRY_KEY, JSON.stringify(next.slice(-200))); } catch {}
+};
+const allMealIds = (p: WeeklyPlan | null) => new Set((p?.days || []).map(m => m.id));
+
 const stripImages = (p: WeeklyPlan): WeeklyPlan => ({
     ...p,
     days: p.days.map(m => ({ ...m, generated_image_url: undefined }))
@@ -175,6 +187,7 @@ export default function App() {
         if (savedPlan) {
             const parsedPlan: WeeklyPlan = JSON.parse(savedPlan);
             setPlan(parsedPlan);
+            setSelectedMealIds(allMealIds(parsedPlan)); // standaard de hele week: één keer boodschappen
             
             // Check for 7-day auto-refresh
             if (parsedPlan.generatedAt) {
@@ -201,7 +214,7 @@ export default function App() {
           weekProfile: 'surprise',
           hasOnboarded: false,
           subscriptionStatus: 'free',
-          zeroWasteLevel: 50,
+          zeroWasteLevel: 65,
           partyGuests: 0,
           dayModes: defaultDayModes,
           generationHistory: []
@@ -244,6 +257,7 @@ export default function App() {
 
         const p = await generateWeeklyPlan(activePrefs, favTitles);
         setPlan(p);
+        setSelectedMealIds(allMealIds(p)); // standaard de hele week: één keer boodschappen
         localStorage.setItem('qook_current_plan', JSON.stringify(stripImages(p)));
         
         // Update generation history with the 7 new meal titles
@@ -375,7 +389,7 @@ export default function App() {
             weekProfile: 'surprise',
             hasOnboarded: false,
             subscriptionStatus: 'free',
-            zeroWasteLevel: 50,
+            zeroWasteLevel: 65,
             partyGuests: 0,
             dayModes: defaultDayModes,
             generationHistory: []
@@ -535,7 +549,7 @@ export default function App() {
             onMealSelect={(m: Meal) => { setSelectedMeal(m); setView('meal-detail'); }} 
             selectedMealIds={selectedMealIds} 
             onToggleShopItem={toggleShopItem} 
-            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { setShoppingList(list); setView('shopping'); setLoading(false); }); }} 
+            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); }).catch(e => alert(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`)).finally(() => setLoading(false)); }} 
             onReplaceMeal={async (oldMeal: Meal, dayIndex: number) => { 
                 if (userStatus === 'free' || userStatus === 'basic') {
                     if (usage.replacements >= 3) { 
@@ -556,6 +570,7 @@ export default function App() {
                     const updatedDays = plan.days.map((m, i) => i === dayIndex ? newMeal : m); 
                     const newPlan = { ...plan, days: updatedDays }; 
                     setPlan(newPlan); 
+                    setSelectedMealIds(prev => { if (!prev.has(oldMeal.id)) return prev; const n = new Set(prev); n.delete(oldMeal.id); n.add(newMeal.id); return n; });
                     localStorage.setItem('qook_current_plan', JSON.stringify(stripImages(newPlan))); 
                     
                     // Add new meal to history
@@ -600,7 +615,7 @@ export default function App() {
             </div>
         )}
         {view === 'cooking' && selectedMeal && <CookingMode meal={selectedMeal} onClose={() => setView('dashboard')} language={currentLang} onFeedback={(_id, rating) => recordTaste(selectedMeal.title, rating === 'up' ? 'liked' : 'disliked')} />}
-        {view === 'shopping' && <ShoppingList items={shoppingList} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => i.id === id ? {...i, checked: !i.checked} : i))} language={currentLang} />}
+        {view === 'shopping' && <ShoppingList items={shoppingList} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => { if (i.id !== id) return i; if (isPantryItem(i)) rememberPantry(i.name, !i.checked); return { ...i, checked: !i.checked }; }))} language={currentLang} />}
       </main>
       {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => { setPreferences(p); triggerRegeneration(p); }} onReset={() => { localStorage.clear(); window.location.reload(); }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
       <ChatAssistant 

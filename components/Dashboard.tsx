@@ -390,7 +390,7 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
               >
                   <div className="absolute inset-0 bg-gradient-to-r from-white/20 via-transparent to-white/20 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000" />
                   <ShoppingBag size={28} className="group-hover:rotate-12 transition-transform" /> 
-                  {t.create_shop_list} ({selectedMealIds.size})
+                  {selectedMealIds.size === plan.days.length ? t.week_shopping : `${t.create_shop_list} (${selectedMealIds.size})`}
               </button>
           </div>
       )}

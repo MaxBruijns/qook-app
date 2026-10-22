@@ -5,6 +5,7 @@ import { Button } from './Shared';
 import { X, Trash2, Heart, Check, Minus, Plus, Leaf, Users, Layout, Utensils, Clock, Banknote, Globe, Languages, MapPin, Lock, Stethoscope, Target, Zap, Settings, ChevronRight, Wine, Wand2, Crown, AlertTriangle, ChevronDown } from 'lucide-react';
 import { useTranslation, getSortedKitchenProfiles } from '../utils/i18n';
 import { getTasteState, setTasteProfile, clearTaste } from '../utils/tasteProfile';
+import { BUDGET_ZERO_WASTE } from './Onboarding';
 
 interface Props {
   isOpen: boolean;
@@ -224,8 +225,8 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                             <span>{t.zero_waste_variety}</span>
                             <span>{t.zero_waste_efficiency}</span>
                         </div>
-                        <input type="range" min="0" max="100" step="10" value={localPrefs.zeroWasteLevel} onChange={(e) => setLocalPrefs({...localPrefs, zeroWasteLevel: parseInt(e.target.value)})} className="w-full h-3 bg-kooq-sage/20 rounded-lg appearance-none cursor-pointer accent-kooq-sage shadow-sm" />
-                        <div className="mt-4 text-center text-xs font-sans font-black text-kooq-sage tracking-wider uppercase">{localPrefs.zeroWasteLevel}% Hergebruik</div>
+                        <input type="range" min="40" max="100" step="5" value={Math.max(40, localPrefs.zeroWasteLevel ?? 65)} onChange={(e) => setLocalPrefs({...localPrefs, zeroWasteLevel: parseInt(e.target.value)})} className="w-full h-3 bg-kooq-sage/20 rounded-lg appearance-none cursor-pointer accent-kooq-sage shadow-sm" />
+                        <div className="mt-4 text-center text-xs font-sans font-black text-kooq-sage tracking-wider uppercase">{Math.max(40, localPrefs.zeroWasteLevel ?? 65)}% Hergebruik</div>
                     </div>
                 </Section>
              )}
@@ -307,7 +308,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                 </p>
                 <div className="grid grid-cols-1 gap-2">
                     {(['Laag', 'Normaal', 'Luxe'] as Budget[]).map(b => (
-                        <button key={b} onClick={() => setLocalPrefs({...localPrefs, budget: b})} className={`py-4 px-6 rounded-2xl flex flex-col items-start text-left border-2 transition-all ${localPrefs.budget === b ? 'bg-kooq-sage text-white border-kooq-sage shadow-sm' : 'bg-white/80 backdrop-blur-sm text-kooq-dark border-kooq-slate/10'}`}>
+                        <button key={b} onClick={() => setLocalPrefs({...localPrefs, budget: b, zeroWasteLevel: BUDGET_ZERO_WASTE[b] ?? 65})} className={`py-4 px-6 rounded-2xl flex flex-col items-start text-left border-2 transition-all ${localPrefs.budget === b ? 'bg-kooq-sage text-white border-kooq-sage shadow-sm' : 'bg-white/80 backdrop-blur-sm text-kooq-dark border-kooq-slate/10'}`}>
                             <span className="text-lg font-sans font-black uppercase tracking-tighter">{(t as any)[`budget_${b}`] || b}</span>
                             <span className={`text-[8px] font-sans font-black uppercase tracking-wider leading-tight ${localPrefs.budget === b ? 'text-white/60' : 'text-kooq-slate'}`}>{(t as any)[`budget_${b}_desc`]}</span>
                         </button>
