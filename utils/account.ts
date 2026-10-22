@@ -247,3 +247,12 @@ export const trackMilestone = (key: 'cooked' | 'liked') => {
 export const bumpStat = (key: keyof AccountStats, value?: number) => {
   stats = { ...stats, [key]: value ?? ((stats[key] || 0) + 1) };
 };
+
+/** Kan de server e-mail versturen (eigen domein ingesteld)? */
+export const mailAvailable = async () => {
+  try { return !!(await api('/auth/config')).email; } catch { return false; }
+};
+
+/** Boodschappenlijst naar het e-mailadres van het account. */
+export const emailShoppingList = (sections: { title: string; items: { name: string; amount: string; checked?: boolean }[] }[]) =>
+  api('/account/email-list', 'POST', { sections });
