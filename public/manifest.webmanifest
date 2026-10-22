@@ -3,7 +3,7 @@
   "short_name": "Qook",
   "description": "Eén weekmenu, één boodschappenlijst. Minder weggooien, minder uitgeven.",
   "lang": "nl",
-  "start_url": "/?bron=app",
+  "start_url": "/app/?bron=app",
   "scope": "/",
   "display": "standalone",
   "background_color": "#F5F7F4",

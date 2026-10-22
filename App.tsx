@@ -151,7 +151,7 @@ export default function App() {
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
   const [plan, setPlan] = useState<WeeklyPlan | null>(null);
   const [userStatus, setUserStatus] = useState<SubscriptionStatus>('free');
-  // Link uit de e-mail "wachtwoord vergeten": /?reset=<sleutel>
+  // Link uit de e-mail "wachtwoord vergeten": /app/?reset=<sleutel>
   const [resetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '');
   const [view, setView] = useState<'choice' | 'onboarding' | 'dashboard' | 'favorites' | 'meal-detail' | 'cooking' | 'shopping' | 'scan-results' | AuthMode>(resetToken ? 'reset' : 'choice');
   const [account] = useState<AccountUser | null>(() => getAccount());
@@ -342,7 +342,7 @@ export default function App() {
   const handleAuthSuccess = (user: AccountUser, mode: AuthMode) => {
     if (mode !== 'register') {
         // Inloggen: de gegevens van het account staan nu op dit apparaat; opnieuw starten laadt ze.
-        window.location.replace('/');
+        window.location.replace('/app/');
         return;
     }
     const updatedPrefs = { 
@@ -604,7 +604,7 @@ export default function App() {
             </div>
         )}
         {(view === 'login' || view === 'register' || view === 'forgot' || view === 'reset') && (
-            <AuthView mode={view} resetToken={resetToken} onSwitch={(m) => setView(m)} onBack={() => { if (resetToken) window.history.replaceState(null, '', '/'); setView(plan ? 'dashboard' : 'choice'); }} onSuccess={handleAuthSuccess} t={t} />
+            <AuthView mode={view} resetToken={resetToken} onSwitch={(m) => setView(m)} onBack={() => { if (resetToken) window.history.replaceState(null, '', '/app/'); setView(plan ? 'dashboard' : 'choice'); }} onSuccess={handleAuthSuccess} t={t} />
         )}
         {view === 'dashboard' && plan && preferences && (
           <Dashboard 

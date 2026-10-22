@@ -1,41 +1,408 @@
 <!DOCTYPE html>
 <html lang="nl">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Qook – jouw weekmenu en boodschappen</title>
-    <meta name="description" content="Eén weekmenu, één boodschappenlijst. Minder weggooien, minder uitgeven." />
-    <meta name="theme-color" content="#94B79D" />
-    <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" type="image/png" href="/favicon.png" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="Qook" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        kooq: {
-                            sage: '#94B79D', sand: '#D9C9A3', white: '#F5F7F4',
-                            slate: '#5D6E76', clementine: '#F3A567', dark: '#2A3338'
-                        }
-                    },
-                    fontFamily: { sans: ['DM Sans', 'sans-serif'], body: ['Inter', 'sans-serif'] }
-                }
-            }
-        }
-    </script>
-    <style>
-        body { background-color: #F5F7F4; color: #5D6E76; }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-    </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Qook – één keer per week boodschappen</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Qook maakt je weekmenu en één boodschappenlijst in de volgorde van de supermarkt. Minder weggooien, minder uitgeven. 14 dagen Premium gratis." />
+<meta name="theme-color" content="#94B79D" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="icon" type="image/png" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+<meta property="og:title" content="Qook – één keer per week boodschappen" />
+<meta property="og:description" content="Weekmenu plus één boodschappenlijst in winkelvolgorde. Minder weggooien, minder uitgeven." />
+<script>
+  // Terugkerende gebruikers en links uit e-mails meteen naar de app.
+  (function () {
+    var q = location.search;
+    if (/[?&]reset=/.test(q)) { location.replace('/app/' + q); return; }
+    try {
+      if (!/[?&]info\b/.test(q) && (localStorage.getItem('qook_prefs') || localStorage.getItem('qook_account'))) location.replace('/app/');
+    } catch (e) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,500;9..40,700;9..40,900&family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout: smalle leeskolom; hero naast een echte weekboodschappenlijst; banden over de volle breedte met eigen binnenrand. */
+:root {
+  --bg: #F5F7F4;          /* app-achtergrond */
+  --paper: #FFFFFF;
+  --ink: #2A3338;         /* kooq dark */
+  --muted: #5D6E76;       /* kooq slate */
+  --sage: #94B79D;
+  --sage-deep: #5E8A69;   /* sage, donkerder voor tekst op licht */
+  --clementine: #F3A567;
+  --line: #DCE3DD;
+  --display: "DM Sans", "Helvetica Neue", Arial, sans-serif;
+  --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --step--1: 0.8125rem; --step-0: 1rem; --step-1: 1.25rem; --step-2: 1.75rem; --step-3: clamp(2.25rem, 5vw, 3.6rem);
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--muted); font-family: var(--body); font-size: var(--step-0); line-height: 1.6; }
+a { color: inherit; }
+h1, h2, h3 { font-family: var(--display); color: var(--ink); line-height: 1.08; letter-spacing: -0.03em; text-wrap: balance; margin: 0; }
+h1 { font-size: var(--step-3); font-weight: 900; }
+h2 { font-size: var(--step-2); font-weight: 900; }
+h3 { font-size: var(--step-1); font-weight: 700; letter-spacing: -0.02em; }
+p { margin: 0; }
+.wrap { max-width: 1100px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.eyebrow { font-family: var(--display); font-weight: 700; font-size: var(--step--1); letter-spacing: 0.12em; text-transform: uppercase; color: var(--sage-deep); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-family: var(--display); font-weight: 700; text-decoration: none;
+  border-radius: 999px; padding: 14px 24px; border: 2px solid transparent; transition: transform .15s ease, background .15s ease; }
+.btn:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid var(--clementine); outline-offset: 3px; }
+.btn-primary { background: var(--ink); color: #fff; }
+.btn-primary:hover { transform: translateY(-1px); background: #1d2427; }
+.btn-ghost { border-color: var(--line); color: var(--ink); background: var(--paper); }
+.btn-ghost:hover { border-color: var(--sage); }
+
+/* Kop */
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 24px; padding-block: 12px; }
+.logo { display: flex; align-items: center; gap: 10px; text-decoration: none; font-family: var(--display); font-weight: 900; font-size: 1.35rem; color: var(--ink); letter-spacing: -0.04em; }
+.logo i { width: 34px; height: 34px; border-radius: 10px; background: var(--sage); color: #fff; display: grid; place-items: center; font-style: normal; font-size: 1.1rem; }
+.top nav { display: flex; gap: 22px; margin-left: auto; font-size: var(--step--1); font-weight: 600; }
+.top nav a { text-decoration: none; color: var(--muted); }
+.top nav a:hover { color: var(--ink); }
+.top .btn { padding: 10px 18px; font-size: var(--step--1); }
+@media (max-width: 720px) { .top nav { display: none; } .top .btn { margin-left: auto; } }
+
+/* Hero */
+.hero .wrap { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 56px; align-items: center; padding-block: 64px 72px; }
+.hero-copy { display: grid; gap: 22px; min-width: 0; }
+.hero-copy .lede { font-size: 1.125rem; max-width: 34em; }
+.hero-copy .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.hero-copy .small { font-size: var(--step--1); }
+.hero-copy .small b { color: var(--ink); }
+@media (max-width: 860px) { .hero .wrap { grid-template-columns: 1fr; gap: 40px; padding-block: 40px 56px; } }
+
+/* De lijst: het product zelf */
+.list { background: var(--paper); border: 1px solid var(--line); border-radius: 28px; padding: 22px 22px 18px; box-shadow: 0 30px 60px -30px rgba(42, 51, 56, .35); min-width: 0; }
+.list-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; border-bottom: 1px dashed var(--line); padding-bottom: 12px; margin-bottom: 6px; }
+.list-head h3 { font-size: 1.1rem; }
+.list-head span { font-size: var(--step--1); white-space: nowrap; }
+.aisle { display: grid; gap: 2px; padding-block: 10px; }
+.aisle + .aisle { border-top: 1px solid var(--line); }
+.aisle h4 { margin: 0 0 4px; font-family: var(--display); font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--sage-deep); display: flex; justify-content: space-between; }
+.aisle h4 small { color: var(--muted); letter-spacing: 0; text-transform: none; font-weight: 500; font-family: var(--body); }
+.row { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: baseline; font-size: 0.92rem; color: var(--ink); }
+.row::before { content: ""; width: 14px; height: 14px; border: 1.5px solid #B9C6BD; border-radius: 4px; transform: translateY(2px); }
+.row.done { color: var(--muted); text-decoration: line-through; text-decoration-color: #B9C6BD; }
+.row.done::before { background: var(--sage); border-color: var(--sage); }
+.row em { font-style: normal; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+.row .use { grid-column: 2 / 4; font-size: 0.75rem; color: var(--sage-deep); margin-top: -2px; }
+.aisle.pantry h4 { color: var(--clementine); }
+
+/* Feitenband */
+.fact { background: var(--ink); color: #C9D3CC; }
+.fact .wrap { display: grid; grid-template-columns: auto 1fr; gap: 40px; align-items: center; padding-block: 44px; }
+.fact .num { font-family: var(--display); font-weight: 900; font-size: clamp(3rem, 8vw, 5.2rem); color: #fff; letter-spacing: -0.05em; line-height: 1; font-variant-numeric: tabular-nums; }
+.fact .num small { font-size: 0.35em; letter-spacing: 0; color: var(--sage); font-weight: 700; margin-left: 6px; }
+.fact p { max-width: 38em; }
+.fact p b { color: #fff; }
+.fact cite { display: block; margin-top: 8px; font-style: normal; font-size: var(--step--1); color: #8E9C95; }
+@media (max-width: 640px) { .fact .wrap { grid-template-columns: 1fr; gap: 16px; } }
+
+section.block .wrap { padding-block: 64px; display: grid; gap: 36px; }
+section.block + section.block:not(.plans-band) .wrap { padding-top: 16px; }
+.section-head { display: grid; gap: 10px; max-width: 40em; }
+
+/* Hoe het werkt */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; list-style: none; margin: 0; padding: 0; counter-reset: step; }
+.steps li { counter-increment: step; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.steps li::before { content: counter(step); font-family: var(--display); font-weight: 900; font-size: 1rem; color: var(--paper); background: var(--sage); width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; }
+@media (max-width: 760px) { .steps { grid-template-columns: 1fr; } }
+
+/* Wat Qook doet: week op houdbaarheid + functies */
+.week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+.day { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 12px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.day b { font-family: var(--display); font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.day span { color: var(--ink); font-size: 0.85rem; line-height: 1.3; }
+.day i { font-style: normal; font-size: 0.72rem; color: var(--sage-deep); }
+.day.fresh { border-color: var(--sage); }
+.day.keep { border-color: #E8D9B9; }
+.week-note { font-size: var(--step--1); }
+@media (max-width: 860px) { .week { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 480px) { .week { grid-template-columns: repeat(2, 1fr); } }
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px 40px; }
+.features div { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.features h3 { font-size: 1.1rem; }
+@media (max-width: 860px) { .features { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 520px) { .features { grid-template-columns: 1fr; } }
+
+/* Abonnementen */
+.plans-band { background: var(--paper); border-block: 1px solid var(--line); }
+.plans { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: stretch; }
+.plan { border: 1px solid var(--line); border-radius: 24px; padding: 24px; display: grid; grid-template-rows: auto auto 1fr auto; gap: 16px; min-width: 0; background: var(--bg); }
+.plan.featured { background: var(--ink); color: #C9D3CC; border-color: var(--ink); }
+.plan.featured h3, .plan.featured .price { color: #fff; }
+.plan .tag { font-family: var(--display); font-weight: 700; font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--sage-deep); }
+.plan.featured .tag { color: var(--clementine); }
+.price { font-family: var(--display); font-weight: 900; font-size: 2rem; color: var(--ink); letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.price small { font-size: 0.9rem; font-weight: 500; letter-spacing: 0; color: var(--muted); }
+.plan.featured .price small { color: #A9B6AE; }
+.price-alt { display: block; font-family: var(--body); font-size: var(--step--1); font-weight: 500; letter-spacing: 0; margin-top: 6px; color: var(--muted); }
+.plan.featured .price-alt { color: #A9B6AE; }
+.plan ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 0.92rem; align-content: start; }
+.plan li { padding-left: 22px; position: relative; }
+.plan li::before { content: ""; position: absolute; left: 2px; top: 0.55em; width: 10px; height: 6px; border-left: 2px solid var(--sage); border-bottom: 2px solid var(--sage); transform: rotate(-45deg); }
+.plan .btn { width: 100%; }
+.plan.featured .btn-primary { background: var(--sage); color: var(--ink); }
+.plans-note { font-size: var(--step--1); }
+@media (max-width: 980px) { .plans { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .plans { grid-template-columns: 1fr; } }
+
+/* Vragen */
+.faq { display: grid; gap: 10px; max-width: 760px; }
+.faq details { background: var(--paper); border: 1px solid var(--line); border-radius: 18px; padding: 4px 20px; }
+.faq summary { cursor: pointer; font-family: var(--display); font-weight: 700; color: var(--ink); padding-block: 14px; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; font-weight: 500; color: var(--sage-deep); }
+.faq details[open] summary::after { content: "–"; }
+.faq details p { padding-bottom: 16px; max-width: 60ch; }
+
+/* Slot */
+.closing .wrap { padding-block: 72px; display: grid; justify-items: start; gap: 18px; }
+footer { border-top: 1px solid var(--line); font-size: var(--step--1); }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between; padding-block: 28px; }
+footer .legal { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
 </head>
 <body>
-    <div id="root"></div>
-    <script type="module" src="index.tsx"></script>
+
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="Qook, naar de voorpagina"><i>Q</i>Qook</a>
+    <nav aria-label="Pagina">
+      <a href="#hoe-het-werkt">Hoe het werkt</a>
+      <a href="#abonnementen">Abonnementen</a>
+      <a href="#vragen">Vragen</a>
+    </nav>
+    <a class="btn btn-primary" href="/app/">Open de app</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-copy">
+        <span class="eyebrow">Weekmenu + boodschappenlijst</span>
+        <h1>Eén keer per week boodschappen. Minder weggooien, minder uitgeven.</h1>
+        <p class="lede">Qook plant je avondeten voor de hele week en zet alles wat je nodig hebt op één lijst, in de volgorde van de supermarkt. Afgestemd op je huishouden, je budget en wat jullie lekker vinden.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="/app/">Maak mijn weekmenu</a>
+          <a class="btn btn-ghost" href="#abonnementen">Bekijk abonnementen</a>
+        </div>
+        <p class="small"><b>14 dagen Premium gratis</b> met een account. Geen betaalgegevens nodig, stopt vanzelf.</p>
+      </div>
+
+      <aside class="list" aria-label="Voorbeeld van een weekboodschappenlijst">
+        <div class="list-head"><h3>Weekboodschappen</h3><span>7 gerechten · 2 volw. + 1 kind</span></div>
+        <div class="aisle">
+          <h4>Groente &amp; fruit <small>bij de ingang</small></h4>
+          <div class="row">Bloemkool<em>1 stuk</em><span class="use">helft ma · rest do in de curry</span></div>
+          <div class="row">Spinazie<em>400 gram</em></div>
+          <div class="row">Rode ui<em>3 stuks</em></div>
+        </div>
+        <div class="aisle">
+          <h4>Vlees, vis &amp; vega</h4>
+          <div class="row">Zalmfilet<em>375 gram</em><span class="use">maandag, voordat hij minder vers is</span></div>
+          <div class="row">Kipdijfilet<em>500 gram</em></div>
+        </div>
+        <div class="aisle">
+          <h4>Zuivel, kaas &amp; eieren</h4>
+          <div class="row">Kookroom<em>250 ml</em><span class="use">ook voor de pasta van woensdag</span></div>
+        </div>
+        <div class="aisle">
+          <h4>Diepvries <small>als laatste</small></h4>
+          <div class="row">Doperwten<em>450 gram</em></div>
+        </div>
+        <div class="aisle pantry">
+          <h4>Heb je dit nog in huis?</h4>
+          <div class="row done">Olijfolie<em>3 eetlepels</em></div>
+          <div class="row">Komijn<em>1 theelepel</em></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="fact" aria-label="Voedselverspilling">
+    <div class="wrap">
+      <div class="num">€100<small>p.p. per jaar</small></div>
+      <div>
+        <p>Zoveel eten gooit iedere Nederlander gemiddeld weg: <b>ongeveer 25 kilo per jaar</b>, vooral brood, groente, fruit en aardappelen. Voor een gezin van vier is dat zo'n €400. Met een weekplanning en exacte hoeveelheden blijft er minder over.</p>
+        <cite>Bron: Voedingscentrum, onderzoek naar voedselverspilling door huishoudens, 2025.</cite>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="hoe-het-werkt">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Hoe het werkt</span>
+        <h2>In drie minuten klaar voor de hele week</h2>
+      </div>
+      <ol class="steps">
+        <li><h3>Vertel wie er mee-eet</h3><p>Aantal personen, dieet, budget en hoeveel tijd je doordeweeks hebt. Kies welke keukens jullie lekker vinden.</p></li>
+        <li><h3>Krijg je weekmenu</h3><p>Zeven avondmaaltijden met foto en volledig recept. Bevalt een gerecht niet? Vervang het met één tik.</p></li>
+        <li><h3>Doe één keer boodschappen</h3><p>De lijst staat klaar in de volgorde van de winkel. Wat je al in huis hebt, vink je af; Qook onthoudt het.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="block" aria-labelledby="wat-qook-doet">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Gepland op houdbaarheid</span>
+        <h2 id="wat-qook-doet">Vers eten vroeg in de week, houdbaar aan het eind</h2>
+        <p>Omdat je maar één keer boodschappen doet, zet Qook vis en verse kip vooraan en peulvruchten, kool en aardappel achteraan. Wat halfvol overblijft, komt later in een ander gerecht terug.</p>
+      </div>
+      <div class="week" role="list" aria-label="Voorbeeldweek">
+        <div class="day fresh" role="listitem"><b>Ma</b><span>Zalm met spinazie en krieltjes</span><i>meest bederfelijk</i></div>
+        <div class="day fresh" role="listitem"><b>Di</b><span>Kip tikka met bloemkoolrijst</span><i>halve bloemkool</i></div>
+        <div class="day" role="listitem"><b>Wo</b><span>Pasta met champignons en room</span><i>rest kookroom</i></div>
+        <div class="day" role="listitem"><b>Do</b><span>Bloemkoolcurry met kikkererwten</span><i>rest bloemkool</i></div>
+        <div class="day keep" role="listitem"><b>Vr</b><span>Linzensoep met brood</span><i>houdbaar</i></div>
+        <div class="day keep" role="listitem"><b>Za</b><span>Stamppot boerenkool met rookworst</span><i>houdbaar</i></div>
+        <div class="day keep" role="listitem"><b>Zo</b><span>Ovenschotel met pompoen</span><i>houdbaar</i></div>
+      </div>
+      <p class="week-note">Voorbeeldweek. Jouw menu hangt af van je voorkeuren en wordt elke week nieuw.</p>
+
+      <div class="features">
+        <div><h3>Kookassistent</h3><p>Stap voor stap koken met timers die alleen lopen waar het ertoe doet.</p></div>
+        <div><h3>Koelkastscan</h3><p>Maak een foto van je koelkast en krijg drie gerechten met wat er nog ligt.</p></div>
+        <div><h3>Leert wat jullie lekker vinden</h3><p>Duim omhoog of omlaag na het koken: volgende weken passen steeds beter.</p></div>
+        <div><h3>Nooit twee keer hetzelfde</h3><p>Gewone gerechten komen pas na acht weken terug; favorieten na vier.</p></div>
+        <div><h3>Jouw winkel, jouw volgorde</h3><p>Zet de afdelingen in de volgorde van jouw supermarkt. Qook onthoudt het.</p></div>
+        <div><h3>Op al je apparaten</h3><p>Met een account staan menu, lijst en voorkeuren op je telefoon en je laptop.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block plans-band" id="abonnementen">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Abonnementen</span>
+        <h2>Begin gratis. Kies pas als je weet wat je bespaart.</h2>
+        <p>Met een account krijg je 14 dagen alle Premium-functies. Daarna kies je zelf, of je gaat verder met Gratis.</p>
+      </div>
+      <div class="plans">
+        <article class="plan">
+          <span class="tag">Gratis</span>
+          <div class="price">€0</div>
+          <ul>
+            <li>Elke week een nieuw weekmenu</li>
+            <li>Weekboodschappen in winkelvolgorde</li>
+            <li>1 recept per week volledig</li>
+            <li>3x per week een gerecht vervangen</li>
+            <li>1x per week koelkastscan</li>
+          </ul>
+          <a class="btn btn-ghost" href="/app/">Begin gratis</a>
+        </article>
+        <article class="plan">
+          <span class="tag">Basic</span>
+          <div class="price">€19,99 <small>per jaar</small><span class="price-alt">€1,66 per maand</span></div>
+          <ul>
+            <li>Alles van Gratis</li>
+            <li>Alle 7 recepten volledig, met kookassistent</li>
+            <li>Zero-waste-rapport per week</li>
+          </ul>
+          <a class="btn btn-ghost" href="/app/">Kies Basic</a>
+        </article>
+        <article class="plan featured">
+          <span class="tag">Meest gekozen · Premium</span>
+          <div class="price">€4,99 <small>per maand</small><span class="price-alt">of €39,99 per jaar</span></div>
+          <ul>
+            <li>Alles van Basic</li>
+            <li>Onbeperkt gerechten vervangen</li>
+            <li>Elke week 1x een extra weekmenu</li>
+            <li>Onbeperkt koelkastscans</li>
+            <li>Menu afgestemd op jullie smaak</li>
+          </ul>
+          <a class="btn btn-primary" href="/app/">Probeer 14 dagen gratis</a>
+        </article>
+        <article class="plan">
+          <span class="tag">Culinair</span>
+          <div class="price">€9,99 <small>per maand</small><span class="price-alt">of €69,99 per jaar</span></div>
+          <ul>
+            <li>Alles van Premium</li>
+            <li>Per dag kiezen: culinair of gewoon</li>
+            <li>Gastronomische recepten</li>
+            <li>Wijnsuggesties en opmaaktips</li>
+          </ul>
+          <a class="btn btn-ghost" href="/app/">Kies Culinair</a>
+        </article>
+      </div>
+      <p class="plans-note">Prijzen in euro's, inclusief btw.</p>
+    </div>
+  </section>
+
+  <section class="block" id="vragen">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Vragen</span>
+        <h2>Goed om te weten</h2>
+      </div>
+      <div class="faq">
+        <details>
+          <summary>Moet ik mijn betaalgegevens invullen voor de proefperiode?</summary>
+          <p>Nee. Je maakt een account met naam, e-mailadres en wachtwoord. Na 14 dagen ga je vanzelf verder met Gratis, tenzij je zelf een abonnement kiest.</p>
+        </details>
+        <details>
+          <summary>Werkt Qook met mijn supermarkt?</summary>
+          <p>Ja. Qook gebruikt ingrediënten die je in elke Nederlandse en Belgische supermarkt vindt. De lijst staat in de looproute van een gemiddelde winkel, en je kunt de afdelingen zelf in de volgorde van jouw winkel zetten.</p>
+        </details>
+        <details>
+          <summary>Ik eet vegetarisch, of mijn kind heeft een allergie. Kan dat?</summary>
+          <p>Je kiest je dieet bij het instellen, en Qook houdt er bij elk gerecht rekening mee. Bij een allergie of intolerantie controleert Qook ook de ingrediënten van elk recept. Garanderen kunnen we het niet: controleer bij een allergie altijd het etiket van elk product.</p>
+        </details>
+        <details>
+          <summary>Hoe groot zijn de hoeveelheden?</summary>
+          <p>Precies voor jullie huishouden, en op de boodschappenlijst afgerond naar wat je in de winkel koopt. Zout, olie en kruiden staan apart, zodat je niet koopt wat je al hebt.</p>
+        </details>
+        <details>
+          <summary>Kan ik Qook op mijn telefoon zetten?</summary>
+          <p>Ja. Open Qook in de browser van je telefoon en kies "Zet op beginscherm". Dan werkt het als een gewone app.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <section class="closing">
+    <div class="wrap">
+      <h2>Deze week al minder weggooien?</h2>
+      <a class="btn btn-primary" href="/app/">Maak mijn weekmenu</a>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span id="company">© <span id="year">2026</span> Qook</span>
+    <div class="legal" id="legal"></div>
+  </div>
+</footer>
+
+<script>
+  // Bedrijfsgegevens: invullen zodra ze bekend zijn; lege velden worden niet getoond.
+  var BEDRIJF = { naam: '', kvk: '', email: '', privacy: '', voorwaarden: '' };
+  (function () {
+    document.getElementById('year').textContent = new Date().getFullYear();
+    var c = document.getElementById('company');
+    if (BEDRIJF.naam) c.appendChild(document.createTextNode(' · ' + BEDRIJF.naam));
+    if (BEDRIJF.kvk) c.appendChild(document.createTextNode(' · KvK ' + BEDRIJF.kvk));
+    var legal = document.getElementById('legal');
+    [['Privacy', BEDRIJF.privacy], ['Voorwaarden', BEDRIJF.voorwaarden]].forEach(function (l) {
+      if (!l[1]) return;
+      var a = document.createElement('a'); a.href = l[1]; a.textContent = l[0]; legal.appendChild(a);
+    });
+    if (BEDRIJF.email) { var s = document.createElement('span'); s.textContent = BEDRIJF.email; legal.appendChild(s); }
+  })();
+</script>
 </body>
 </html>
