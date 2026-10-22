@@ -98,12 +98,56 @@ export const replaceMeal = async (currentMeal: Meal, prefs: UserPreferences, day
 
 // --- VOLLEDIG RECEPT ------------------------------------------------------
 // De backend bewaart elk recept één keer (voor een vast aantal personen);
-// hier rekenen we de hoeveelheden om naar dit huishouden.
-const roundAmount = (n: number) => {
-  if (!isFinite(n) || n <= 0) return n;
-  if (n >= 100) return Math.round(n / 5) * 5;
-  if (n >= 10) return Math.round(n);
-  return Math.round(n * 4) / 4;
+// hier rekenen we de hoeveelheden om naar dit huishouden, in keukenmaten.
+const NOT_SCALED = /naar smaak|snufje|scheutje|beetje|handje|optioneel/i;
+const COUNT_UNITS = /^(st|stuks?|stuk|teen|tenen|teentjes?|bosjes?|blik(ken)?|pot(ten)?|zakjes?|plakjes?|plakken|takjes?|blaadjes?|eetlepels?|theelepels?|el|tl|kopjes?|pieces?|cloves?|tbsp|tsp|cups?)$/i;
+
+const HALF_UNITS = /^(eetlepels?|theelepels?|el|tl|bosjes?|kopjes?|blik(ken)?|tbsp|tsp|cups?)$/i;
+const HALVABLE = /citroen|limoen|sinaasappel|\bui\b|uien|paprika|avocado|komkommer|courgette|aubergine|kool|broccoli|pompoen|meloen|ananas|mango|venkel|prei/i;
+
+const FRACTIONS: Record<number, string> = { 0.25: '¼', 0.5: '½', 0.75: '¾' };
+
+/** 1.5 -> "1½", 0.5 -> "½", 2 -> "2" */
+const withFraction = (n: number): string => {
+  const whole = Math.floor(n);
+  const frac = Math.round((n - whole) * 4) / 4;
+  if (frac === 1) return String(whole + 1);
+  const f = FRACTIONS[frac] || '';
+  return whole === 0 ? (f || '0') : `${whole}${f}`;
+};
+
+/** Enkelvoud t/m 1, meervoud daarboven: "1 eetlepel", "2 eetlepels", "½ stuk", "3 tenen". */
+const PLURALS: Record<string, string> = { stuk: 'stuks', teen: 'tenen', eetlepel: 'eetlepels', theelepel: 'theelepels',
+  bosje: 'bosjes', blik: 'blikken', pot: 'potten', zakje: 'zakjes', plakje: 'plakjes', takje: 'takjes', kopje: 'kopjes' };
+const SINGULARS: Record<string, string> = Object.fromEntries(Object.entries(PLURALS).map(([a, b]) => [b, a]));
+const countUnit = (unit: string, v: number) => {
+  const u = unit.toLowerCase();
+  if (v <= 1) return SINGULARS[u] || unit;
+  return PLURALS[u] || unit;
+};
+
+export const scaleIngredient = (ing: any, factor: number) => {
+  const unit = String(ing.unit || '').trim();
+  const amount = Number(ing.amount) || 0;
+  // Zout, peper, "naar smaak": niet omrekenen en geen getal tonen.
+  if (NOT_SCALED.test(unit) || NOT_SCALED.test(String(ing.name || '')) || amount <= 0) {
+    return { ...ing, amount: '', unit: unit || 'naar smaak' };
+  }
+  const n = amount * factor;
+  if (COUNT_UNITS.test(unit) || !unit) {
+    // Lepels, bosjes en groente/fruit dat je kunt halveren: in halven.
+    // Al het andere (eieren, tenen knoflook, zalmfilets): hele aantallen, minimaal 1.
+    const halvesOk = HALF_UNITS.test(unit) || HALVABLE.test(String(ing.name || ''));
+    const v = halvesOk ? Math.max(0.5, Math.round(n * 2) / 2) : Math.max(1, Math.round(n));
+    return { ...ing, amount: withFraction(v), unit: countUnit(unit, v) };
+  }
+  // Gram, ml en dergelijke: afronden op logische maten.
+  let v: number;
+  if (n < 10) v = Math.max(1, Math.round(n));
+  else if (n < 100) v = Math.round(n / 5) * 5;
+  else if (n < 500) v = Math.round(n / 10) * 10;
+  else v = Math.round(n / 50) * 50;
+  return { ...ing, amount: v, unit };
 };
 
 export const generateFullRecipe = async (meal: Meal, prefs: UserPreferences): Promise<Meal> => {
@@ -114,10 +158,8 @@ export const generateFullRecipe = async (meal: Meal, prefs: UserPreferences): Pr
     language: prefs?.language || 'nl-NL',
   });
   const factor = servings / (data.base_servings || servings);
-  const ingredients = (data.ingredients || []).map((i: any) => ({
-    ...i, amount: roundAmount((Number(i.amount) || 0) * factor),
-  }));
-  const { base_servings, ...rest } = data;
+  const ingredients = (data.ingredients || []).map((i: any) => scaleIngredient(i, factor));
+  const { base_servings, v, ...rest } = data;
   return { ...meal, servings, ...rest, ingredients };
 };
 

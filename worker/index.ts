@@ -10,7 +10,8 @@
  *
  * Instellingen (Cloudflare → Worker → Settings → Variables and Secrets):
  *  - GEMINI_API_KEY (secret, verplicht)
- *  - TEXT_MODEL     (optioneel, standaard gemini-3.5-flash-lite)
+ *  - TEXT_MODEL     (optioneel, standaard gemini-3.5-flash-lite) — weekmenu, vervangen, chat
+ *  - RECIPE_MODEL   (optioneel, standaard gemini-3.8-flash) — volledige recepten (1x per gerecht)
  */
 
 interface Env {
@@ -20,6 +21,7 @@ interface Env {
   ASSETS: any;        // De gebouwde website
   GEMINI_API_KEY: string;
   TEXT_MODEL?: string;
+  RECIPE_MODEL?: string;
 }
 
 const IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';
@@ -53,9 +55,13 @@ const list = (a: any) => (Array.isArray(a) ? a : []);
 // ---------------------------------------------------------------------------
 // Gemini
 // ---------------------------------------------------------------------------
-async function aiJson(env: Env, system: string, prompt: string, temperature = 0.8, imageB64?: string): Promise<any> {
+const DEFAULT_TEXT_MODEL = 'gemini-3.5-flash-lite';
+const DEFAULT_RECIPE_MODEL = 'gemini-3.8-flash';
+
+async function aiJson(env: Env, system: string, prompt: string, temperature = 0.8, imageB64?: string,
+                      modelOverride?: string): Promise<any> {
   if (!env.GEMINI_API_KEY) throw new ApiError(500, 'GEMINI_API_KEY ontbreekt in de Worker-instellingen');
-  const model = env.TEXT_MODEL || 'gemini-3.5-flash-lite';
+  const model = modelOverride || env.TEXT_MODEL || DEFAULT_TEXT_MODEL;
   const parts: any[] = [];
   if (imageB64) parts.push({ inline_data: { mime_type: 'image/jpeg', data: imageB64 } });
   parts.push({ text: prompt });
@@ -211,14 +217,29 @@ const MEAL_SHAPE = `{
   "mode": "premium of culinary"
 }`;
 
+/** Verhoog dit als de receptregels veranderen: oudere bewaarde recepten worden dan opnieuw gemaakt. */
+const RECIPE_VERSION = 2;
+
 const FULL_RECIPE_SHAPE = `{
-  "ingredients": [{"name": "...", "amount": 0, "unit": "..."}],
+  "ingredients": [{"name": "...", "amount": 0, "unit": "gram | ml | stuks | eetlepel | theelepel | teen | bosje | snufje | naar smaak"}],
   "steps": [{"step_index": 1, "user_text": "...", "needs_timer": false, "timer_label": "...", "estimated_duration_seconds": 0}],
   "supplies": ["benodigd keukengerei"],
   "nutrition": {"calories": 0},
   "plating_tips": "...",
   "wine_pairing": {"type": "...", "description": "..."}
 }`;
+
+const RECIPE_RULES = `KWALITEITSREGELS (controleer je recept hierop voordat je antwoordt):
+1. Elk ingrediënt uit de lijst wordt in de stappen gebruikt, en elk ingrediënt dat in de stappen voorkomt staat in de lijst,
+   met dezelfde naam (dus niet "olie" in de lijst en "olijfolie" in de stappen).
+2. Hoeveelheden kloppen met de stappen: wordt iets op twee plekken gebruikt, dan is de totale hoeveelheid daarop berekend.
+3. Noem de oven ALLEEN als het gerecht echt in de oven gaat. Zo ja: temperatuur en tijd in de stap.
+4. Geef bij bakken, koken, grillen en sudderen altijd een concrete tijd of een duidelijk teken van gaarheid.
+5. De laatste stap is altijd het opdienen: hoe alles op het bord komt, inclusief sauzen en garnering.
+6. Gebruik praktische keukenmaten: hele stuks waar logisch (1 citroen, 2 tenen knoflook), kruiden in bosjes of
+   eetlepels, kleine hoeveelheden in theelepels. Zout en peper als unit "naar smaak" met amount 0.
+7. Correcte spelling en grammatica in het Nederlands (enkelvoud bij 1: "1 eetlepel").
+8. Benodigdheden bevat alleen keukengerei dat in de stappen echt gebruikt wordt.`;
 
 const TIMER_RULES = `STRIKTE TIMER REGELS:
 1. NOOIT een timer voor de oven (ovens hebben eigen timers).
@@ -314,13 +335,29 @@ Antwoord uitsluitend met JSON in deze vorm: ${MEAL_SHAPE}`;
 async function fullRecipe(env: Env, b: any) {
   const meal = b.meal || {};
   let recipe = await findRecipe(env, meal.id, meal.title);
-  if (recipe?.details) return { ...JSON.parse(recipe.details), base_servings: BASE_SERVINGS };
+  if (recipe?.details) {
+    const stored = JSON.parse(recipe.details);
+    if (stored.v === RECIPE_VERSION) return { ...stored, base_servings: BASE_SERVINGS };
+  }
 
-  const system = `Schrijf in het ${langName(b.language)}. Hoeveelheden voor ${BASE_SERVINGS} personen.
+  const summary = recipe ? JSON.parse(recipe.data || '{}') : meal;
+  const system = `Je bent een ervaren chef en schrijft een volledig, foutloos recept voor thuiskoks.
+Schrijf in het ${langName(b.language)}. Hoeveelheden voor ${BASE_SERVINGS} personen.
+${RECIPE_RULES}
 ${TIMER_RULES}
 Antwoord uitsluitend met JSON in deze vorm: ${FULL_RECIPE_SHAPE}`;
-  const details = await aiJson(env, system, `Volledig recept voor: ${meal.title}. Modus: ${meal.mode || 'premium'}.`, 0.6);
+  const prompt = `Volledig recept voor: ${meal.title}. Modus: ${meal.mode || summary.mode || 'premium'}.
+Omschrijving: ${summary.short_description || meal.short_description || ''}`;
+  let details: any;
+  try {
+    details = await aiJson(env, system, prompt, 0.5, undefined, env.RECIPE_MODEL || DEFAULT_RECIPE_MODEL);
+  } catch (e) {
+    // Beter model niet beschikbaar of druk: val terug op het standaardmodel.
+    console.error('Receptmodel mislukt, terugval op standaardmodel', e);
+    details = await aiJson(env, system, prompt, 0.5);
+  }
   const clean = {
+    v: RECIPE_VERSION,
     ingredients: list(details.ingredients),
     steps: list(details.steps).map((s: any, i: number) => ({ ...s, step_index: s.step_index ?? i + 1 })),
     supplies: list(details.supplies),
@@ -464,7 +501,8 @@ export default {
         await ensureSchema(env);
         return json({
           status: 'ok',
-          text_model: env.TEXT_MODEL || 'gemini-3.5-flash-lite',
+          text_model: env.TEXT_MODEL || DEFAULT_TEXT_MODEL,
+          recipe_model: env.RECIPE_MODEL || DEFAULT_RECIPE_MODEL,
           gemini_key: env.GEMINI_API_KEY ? 'ingesteld' : 'ONTBREEKT',
           database: 'ok',
         });
