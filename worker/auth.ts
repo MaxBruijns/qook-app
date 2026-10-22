@@ -222,6 +222,8 @@ export async function currentUser(req: Request, env: AuthEnv): Promise<{ user: a
   let refresh: string | undefined;
   if (row.expires_at - Date.now() < (SESSION_DAYS / 2) * DAY_MS) {
     await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE token_hash = ?').bind(Date.now() + SESSION_DAYS * DAY_MS, hash).run();
+    // Laatst gezien (ongeveer maandelijks): voor het opruimen van accounts die lang niet gebruikt zijn.
+    await env.DB.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').bind(row.id).run();
     refresh = sessionCookie(token, SESSION_DAYS * 24 * 3600);
   }
   return { user: row, refresh };

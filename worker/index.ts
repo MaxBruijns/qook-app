@@ -25,7 +25,7 @@
 
 import { handleAuth, currentUser, tierOf } from './auth';
 import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
-import { recordMilestone, countReused, runTrialMails, unsubscribe, Milestone } from './engagement';
+import { recordMilestone, countReused, runTrialMails, unsubscribe, cleanupInactiveAccounts, Milestone } from './engagement';
 import { handleAdmin, reportRecipe, countVisit } from './admin';
 import { handleBilling } from './billing';
 import { handleExternal } from './external';
@@ -1703,7 +1703,8 @@ export default {
     const run = seedRound(env).then(s => console.log('Receptenbank aangevuld:', JSON.stringify(s)))
       .finally(() => cleanupCounters(env.DB).catch(() => {}))
       .finally(() => runTrialMails(env).then(r => { if (r.sent) console.log('Proef-e-mails:', JSON.stringify(r)); })
-        .catch(e => console.warn('Proef-e-mails mislukt', errMsg(e))));
+        .catch(e => console.warn('Proef-e-mails mislukt', errMsg(e))))
+      .finally(() => cleanupInactiveAccounts(env).catch(e => console.warn('Opruimen accounts mislukt', errMsg(e))));
     if (ctx?.waitUntil) ctx.waitUntil(run); else await run;
   },
 };

@@ -255,3 +255,41 @@ export async function unsubscribe(env: EngagementEnv, token: string) {
 <p>Je krijgt geen tips en aanbiedingen meer van Qook. Berichten over je account (zoals een nieuw wachtwoord) blijven we wel sturen.</p>
 <p><a href="/app/" style="color:#5E8A69">Naar Qook</a></p></main></body>`, { headers: { 'content-type': 'text/html; charset=utf-8' } });
 }
+
+// ---------------------------------------------------------------------------
+// Accounts die 24 maanden niet gebruikt zijn: een maand vooraf een mail, daarna verwijderen.
+// ---------------------------------------------------------------------------
+const MONTH_MS = 30 * DAY_MS;
+const sqlTime = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+
+export async function cleanupInactiveAccounts(env: EngagementEnv, now = Date.now()) {
+  await ensureEngagementSchema(env.DB);
+  const url = (env.APP_URL || DEFAULT_URL).replace(/\/$/, '');
+  let warned = 0, deleted = 0;
+  // Waarschuwen na 23 maanden (alleen als e-mail werkt en het adres bevestigd is).
+  if (mailReady(env)) {
+    const { results } = await env.DB.prepare(`SELECT u.id, u.name, u.email FROM users u
+      WHERE COALESCE(u.last_login_at, u.created_at) < ? AND u.email_verified = 1
+        AND NOT EXISTS (SELECT 1 FROM email_log l WHERE l.user_id = u.id AND l.kind = 'inactive_warning') LIMIT 20`)
+      .bind(sqlTime(now - 23 * MONTH_MS)).all();
+    for (const u of results || []) {
+      try {
+        await sendMail(env, u.email, 'Je Qook-account wordt over een maand verwijderd',
+          `Hoi ${u.name},\n\nJe hebt Qook bijna twee jaar niet gebruikt. Om je gegevens niet langer te bewaren dan nodig, ` +
+          `verwijderen we je account over een maand.\n\nWil je het houden? Log dan in: ${url}/app/\n\nGroet,\nQook`);
+        await env.DB.prepare('INSERT OR IGNORE INTO email_log (user_id, kind, sent_at) VALUES (?, ?, ?)').bind(u.id, 'inactive_warning', now).run();
+        warned++;
+      } catch { /* volgende ronde opnieuw */ }
+    }
+  }
+  // Verwijderen na 24 maanden (zonder betaald abonnement).
+  const { results: old } = await env.DB.prepare(`SELECT id FROM users WHERE COALESCE(last_login_at, created_at) < ?
+      AND subscription NOT IN ('basic', 'premium', 'culinary') LIMIT 50`).bind(sqlTime(now - 24 * MONTH_MS)).all();
+  for (const u of old || []) {
+    await env.DB.batch(['user_data', 'sessions', 'password_resets', 'user_milestones', 'email_log', 'email_verifications']
+      .map(t => env.DB.prepare(`DELETE FROM ${t} WHERE user_id = ?`).bind(u.id))
+      .concat([env.DB.prepare('DELETE FROM users WHERE id = ?').bind(u.id)])).catch(() => {});
+    deleted++;
+  }
+  return { warned, deleted };
+}

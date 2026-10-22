@@ -115,6 +115,7 @@ async function checkout(req: Request, env: BillingEnv, user: any, b: any) {
     cancel_url: `${origin}/app/?betaald=0`,
     locale: 'nl',
     allow_promotion_codes: 'true',
+    custom_text: { submit: { message: 'Je abonnement start direct. Herroep je binnen 14 dagen, dan betaal je alleen voor de dagen dat je Qook gebruikte. Opzeggen kan altijd in de app.' } },
     billing_address_collection: 'auto',
     metadata: { user_id: user.id, plan },
     subscription_data: { metadata: { user_id: user.id, plan } },

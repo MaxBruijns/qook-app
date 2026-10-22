@@ -16,6 +16,7 @@ export interface UserPreferences {
   childrenCount: number;
   diet: string[];
   customDiet?: string;
+  allergyConsent?: string;   // datum van uitdrukkelijke toestemming voor allergie-/intolerantiediëten (AVG art. 9)
   budget: Budget;
   cookingTime: CookingTime;
   weekendCookingTime: CookingTime;

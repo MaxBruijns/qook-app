@@ -328,6 +328,13 @@ export default function App() {
 
   /** Nieuwe voorkeuren (instellingen, chat): direct een nieuw menu als dat mag, anders vanaf volgende week. */
   const applyPrefs = (p: UserPreferences, regen = true) => {
+    // Allergie-diëten (gezondheidsgegeven) alleen met toestemming; die geef je in Instellingen.
+    const ALLERGY = ['Glutenarm', 'Lactosevrij', 'Notenvrij'];
+    if (!p.allergyConsent && (p.diet || []).some(d => ALLERGY.includes(d))) {
+      p = { ...p, diet: (p.diet || []).filter(d => !ALLERGY.includes(d)) };
+      if (!p.diet.length) p.diet = ['Geen'];
+      notify(t.allergy_consent_needed);
+    }
     setPreferences(p);
     localStorage.setItem('qook_prefs', JSON.stringify(p));
     if (!regen) return;

@@ -2,6 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import assert from 'node:assert/strict';
 import worker from './worker.mjs';
+import { cleanupInactiveAccounts } from './engagement.mjs';
 const sqlite = new DatabaseSync(':memory:');
 class Stmt { constructor(sql, args = []) { this.sql = sql; this.args = args; } bind(...a) { return new Stmt(this.sql, a); }
   async all() { return { results: sqlite.prepare(this.sql).all(...this.args) }; } async first() { return sqlite.prepare(this.sql).get(...this.args) ?? null; }
@@ -49,4 +50,16 @@ assert.equal((await req('/api/account/export')).status, 401);
 delete env.RESEND_API_KEY;
 r = await req('/api/auth/register', { method: 'POST', body: { name: 'Bo', email: 'bo@q.test', password: 'Wachtwoord1' } });
 assert.equal(r.status, 201); assert.equal(mails.length, 1);
+// Accounts die lang niet gebruikt zijn: waarschuwen na 23 maanden, verwijderen na 24
+env.RESEND_API_KEY = 'x';
+const ago = (months) => new Date(Date.now() - months * 30 * 864e5).toISOString().replace('T', ' ').slice(0, 19);
+sqlite.prepare("UPDATE users SET last_login_at = ? WHERE email = 'max@q.test'").run(ago(23.5));
+sqlite.prepare("UPDATE users SET last_login_at = ?, created_at = ? WHERE email = 'bo@q.test'").run(ago(25), ago(25));
+const before = mails.length;
+let res = await cleanupInactiveAccounts(env);
+assert.deepEqual(res, { warned: 1, deleted: 1 });
+assert.match(mails.at(-1).subject, /over een maand verwijderd/); assert.equal(mails.length, before + 1);
+assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM users WHERE email = 'bo@q.test'").get().n, 0);
+res = await cleanupInactiveAccounts(env);
+assert.equal(res.warned, 0, 'maar één waarschuwing');
 console.log('ACCOUNT-EXTRA: ALLE TESTS GESLAAGD');

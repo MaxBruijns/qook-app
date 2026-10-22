@@ -188,10 +188,13 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
     else onShowPaywall('culinary');
   };
 
+  // Een allergie-/intolerantiedieet is een gezondheidsgegeven: eerst uitdrukkelijke toestemming vragen.
+  const [askConsentFor, setAskConsentFor] = useState<string | null>(null);
   const toggleDiet = (val: string) => {
     const current = localPrefs.diet || [];
-    if (current.includes(val)) setLocalPrefs({ ...localPrefs, diet: current.filter(d => d !== val) });
-    else setLocalPrefs({ ...localPrefs, diet: [...current, val] });
+    if (current.includes(val)) { setLocalPrefs({ ...localPrefs, diet: current.filter(d => d !== val) }); return; }
+    if (ALLERGY_DIETS.includes(val) && !localPrefs.allergyConsent) { setAskConsentFor(val); return; }
+    setLocalPrefs({ ...localPrefs, diet: [...current.filter(d => d !== 'Geen'), val] });
   };
 
   const dietOptions = [
@@ -256,6 +259,16 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                         </button>
                     ))}
                 </div>
+                {askConsentFor && (
+                    <div className="mt-4 text-[11px] leading-relaxed text-kooq-dark bg-white border border-kooq-slate/10 rounded-2xl px-4 py-3 space-y-3">
+                        <p>{t.allergy_consent}</p>
+                        <div className="flex gap-3">
+                            <button onClick={() => { setLocalPrefs({ ...localPrefs, allergyConsent: new Date().toISOString(), diet: [...(localPrefs.diet || []).filter(d => d !== 'Geen'), askConsentFor] }); setAskConsentFor(null); }}
+                                className="px-3 py-2 rounded-xl bg-kooq-sage text-white font-sans font-black text-[10px] uppercase tracking-widest">{t.allergy_consent_yes}</button>
+                            <button onClick={() => setAskConsentFor(null)} className="px-3 py-2 text-kooq-slate text-[10px] font-sans font-black uppercase tracking-widest">{t.cancel}</button>
+                        </div>
+                    </div>
+                )}
                 {(localPrefs.diet || []).some(d => ALLERGY_DIETS.includes(d)) && (
                     <p className="mt-4 text-[11px] leading-relaxed text-kooq-dark bg-kooq-clementine/10 border border-kooq-clementine/20 rounded-2xl px-4 py-3">{t.allergy_notice}</p>
                 )}
