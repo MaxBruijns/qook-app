@@ -118,7 +118,7 @@ function ensureSchema(env: Env) {
 
 const imageUrl = (id: string) => `/api/images/${id}.jpg`;
 
-const SUMMARY_FIELDS = ['title', 'short_description', 'ai_image_prompt', 'estimated_time_minutes', 'difficulty',
+const SUMMARY_FIELDS = ['title', 'short_description', 'ai_image_prompt', 'main_ingredient', 'cuisine', 'estimated_time_minutes', 'difficulty',
   'calories_per_portion', 'chefs_hack', 'wine_pairing', 'plating_tips', 'mode'];
 
 /** Bewaart gerechten in de bank. Bestaande titels worden hergebruikt (incl. foto en volledig recept). */
@@ -214,7 +214,9 @@ const MEAL_SHAPE = `{
   "chefs_hack": "één slimme kooktip",
   "wine_pairing": {"type": "wijnsoort", "description": "waarom deze wijn past"},
   "plating_tips": "professionele opmaaktips (vooral voor culinary)",
-  "mode": "premium of culinary"
+  "mode": "premium of culinary",
+  "main_ingredient": "belangrijkste ingrediënt in één woord, bv. kip, rundvlees, varkensvlees, zalm, kabeljauw, garnalen, kikkererwten, linzen, tofu, ei, kaas",
+  "cuisine": "keuken in één woord, bv. Italiaans, Aziatisch, Indiaas, Mexicaans, Hollands, Frans, Mediterraan, Midden-Oosters"
 }`;
 
 /** Verhoog dit als de receptregels veranderen: oudere bewaarde recepten worden dan opnieuw gemaakt. */
@@ -284,6 +286,7 @@ Stem de gerechten hierop af, maar blijf verrassen: ongeveer 1 op de 7 gerechten 
 // ---------------------------------------------------------------------------
 async function weeklyPlan(env: Env, b: any) {
   const prefs = b.prefs || {};
+  const v = buildVariety(b, prefs);
   const dayModes: Record<string, string> = prefs.dayModes || {};
   const modes = Object.entries(dayModes).sort(([a], [c]) => Number(a) - Number(c))
     .map(([d, m]) => `Day ${d}: ${m}`).join(', ');
@@ -295,9 +298,8 @@ AGENDA (STRIKT VOLGEN):
 ${modes}
 
 STRIKTE VARIATIE REGELS:
-- VERMIJD de volgende gerechten (EXCLUDE): ${joinOr(list(prefs.generationHistory).slice(-100), 'Geen')}. Dit zijn gerechten die de gebruiker al gepland heeft. Wees creatief en kom met iets nieuws.
-- INSPIRE: De gebruiker houdt van gerechten zoals: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik deze lijst om de smaakvoorkeuren te begrijpen en genereer NIEUWE gerechten in diezelfde sfeer.
-- NOOIT een gerecht letterlijk herhalen uit de geschiedenis.
+${varietyRules(v)}
+- INSPIRE: De gebruiker houdt van gerechten zoals: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik deze lijst om de smaakvoorkeuren te begrijpen en genereer vooral NIEUWE gerechten in diezelfde sfeer.
 
 ZERO-WASTE INSTRUCTIE:
 - Zero-Waste Level: ${prefs.zeroWasteLevel ?? 50}% (0 = maximale variatie, 100 = maximale efficiency/hergebruik ingrediënten).
@@ -322,14 +324,18 @@ Antwoord uitsluitend met JSON: {"zero_waste_report": "...", "days": [7 gerechten
   const days = list(data.days).slice(0, 7);
   days.forEach((m: any, i: number) => { m.mode = dayModes[String(i)] || 'premium'; });
 
-  // Harde controle: geen twee keer (bijna) hetzelfde gerecht in één week.
-  const seen: string[] = [];
+  // Harde controle: geen dubbele gerechten, niets dat recent gegeten of afgekeurd is,
+  // maximaal 1 favoriet, elk hoofdingrediënt max 2x en elke keuken max 3x per week.
   for (let i = 0; i < days.length; i++) {
-    if (isDuplicate(days[i].title, seen)) {
-      const others = days.filter((_: any, j: number) => j !== i).map((m: any) => m.title);
-      days[i] = await generateOneMeal(env, prefs, i, others, b.favoriteTitles, days[i].title);
+    const reason = conflictReason(days[i], days.slice(0, i), v);
+    if (!reason) continue;
+    console.warn(`Dag ${i}: "${days[i].title}" afgekeurd (${reason}), wordt vervangen`);
+    const others = days.filter((_: any, j: number) => j !== i);
+    try {
+      days[i] = await generateOneMeal(env, prefs, i, others, v, b.favoriteTitles, days[i].title);
+    } catch (e) {
+      console.error(`Dag ${i}: geen geldig alternatief gevonden, origineel blijft staan`, e);
     }
-    seen.push(days[i].title);
   }
 
   await saveRecipes(env, days);
@@ -361,31 +367,119 @@ const isDuplicate = (title: any, others: any[]) => {
   });
 };
 
-/** Eén gerecht voor een dag, gegarandeerd anders dan de verboden titels (max. 2 pogingen). */
-async function generateOneMeal(env: Env, prefs: any, dayIndex: number, forbidden: string[],
+// ---------------------------------------------------------------------------
+// Variatie over weken heen
+//   - gewone gerechten: niet terug binnen 8 weken
+//   - favorieten: na 4 weken weer toegestaan, max. 1 per week
+//   - duim omlaag: nooit meer
+//   - per week: elk hoofdingrediënt max. 2x, elke keuken max. 3x
+// ---------------------------------------------------------------------------
+const NORMAL_WEEKS = 8;
+const FAVORITE_WEEKS = 4;
+const MAX_SAME_MAIN = 2;
+const MAX_SAME_CUISINE = 3;
+
+interface Variety {
+  blocked: string[];            // mag deze week niet terugkomen
+  favorites: string[];          // alle favorieten van de gebruiker
+  favoritesAllowed: string[];   // favorieten die weer mogen (lang genoeg geleden)
+  recentCuisines: string;       // "Italiaans 4x, Aziatisch 3x" (laatste 3 weken)
+}
+
+const normWord = (w: any) => normTitle(w).split(' ')[0] || '';
+
+function buildVariety(b: any, prefs: any): Variety {
+  let history = list(b.history).filter((h: any) => h && h.title)
+    .map((h: any) => ({ title: String(h.title), weeksAgo: Number(h.weeksAgo) || 0, cuisine: h.cuisine }));
+  if (!history.length) {
+    // Oudere app-versie: alleen titels zonder datum, behandel als recent.
+    history = list(prefs.generationHistory).slice(-60).map((t: any) => ({ title: String(t), weeksAgo: 0, cuisine: undefined }));
+  }
+  const favorites = list(b.favoriteTitles).map(String);
+  const disliked = list(b.dislikedTitles).map(String);
+  const isFav = (t: string) => isDuplicate(t, favorites);
+
+  const blocked = [...disliked];
+  for (const h of history) {
+    const window = isFav(h.title) ? FAVORITE_WEEKS : NORMAL_WEEKS;
+    if (h.weeksAgo < window) blocked.push(h.title);
+  }
+  const favoritesAllowed = favorites.filter(f => !isDuplicate(f, blocked));
+
+  const counts: Record<string, number> = {};
+  for (const h of history) if (h.weeksAgo < 3 && h.cuisine) {
+    const c = String(h.cuisine);
+    counts[c] = (counts[c] || 0) + 1;
+  }
+  const recentCuisines = Object.entries(counts).sort((a, c) => c[1] - a[1]).slice(0, 4)
+    .map(([c, n]) => `${c} ${n}x`).join(', ');
+  return { blocked: [...new Set(blocked)].slice(-150), favorites, favoritesAllowed, recentCuisines };
+}
+
+function varietyRules(v: Variety) {
+  return `- NIET GEBRUIKEN (recent gegeten of afgekeurd, ook geen varianten hiervan): ${joinOr(v.blocked, 'Geen')}.
+- FAVORIETEN die weer mogen terugkomen (hoogstens 1 deze week): ${joinOr(v.favoritesAllowed, 'Geen')}.
+- Elk hoofdingrediënt hoogstens ${MAX_SAME_MAIN}x per week; hoogstens 2 gerechten uit dezelfde keuken.${v.recentCuisines ? `
+- De afgelopen weken veel: ${v.recentCuisines}. Kies vooral andere keukens.` : ''}`;
+}
+
+/** Waarom past dit gerecht niet in de week? null = het past. */
+function conflictReason(meal: any, week: any[], v: Variety): string | null {
+  const title = meal?.title;
+  if (isDuplicate(title, week.map(m => m.title))) return 'staat al in deze week';
+  if (isDuplicate(title, v.blocked)) return 'recent gegeten of afgekeurd';
+  const isFav = (t: any) => isDuplicate(t, v.favorites);
+  if (isFav(title) && week.some(m => isFav(m.title))) return 'al een favoriet deze week';
+  const main = normWord(meal?.main_ingredient);
+  if (main && week.filter(m => normWord(m.main_ingredient) === main).length >= MAX_SAME_MAIN) {
+    return `hoofdingrediënt ${meal.main_ingredient} al ${MAX_SAME_MAIN}x deze week`;
+  }
+  const cuisine = normWord(meal?.cuisine);
+  if (cuisine && week.filter(m => normWord(m.cuisine) === cuisine).length >= MAX_SAME_CUISINE) {
+    return `keuken ${meal.cuisine} al ${MAX_SAME_CUISINE}x deze week`;
+  }
+  return null;
+}
+
+/** Eén gerecht voor een dag dat in de week past (max. 2 pogingen). */
+async function generateOneMeal(env: Env, prefs: any, dayIndex: number, weekOthers: any[], v: Variety,
                                favoriteTitles: any, currentTitle = ''): Promise<any> {
   const targetMode = (prefs.dayModes || {})[String(dayIndex)] || 'premium';
   const maxTime = dayIndex >= 5 ? prefs.weekendCookingTime : prefs.cookingTime;
-  const blocked = [...new Set([currentTitle, ...forbidden].filter(Boolean))];
+  const weekTitles = weekOthers.map(m => m.title).filter(Boolean);
+  const countBy = (key: string) => {
+    const c: Record<string, number> = {};
+    for (const m of weekOthers) { const k = m[key]; if (k) c[k] = (c[k] || 0) + 1; }
+    return c;
+  };
+  const fullMains = Object.entries(countBy('main_ingredient')).filter(([, n]) => n >= MAX_SAME_MAIN).map(([k]) => k);
+  const fullCuisines = Object.entries(countBy('cuisine')).filter(([, n]) => n >= MAX_SAME_CUISINE - 1).map(([k]) => k);
+  const vReplace: Variety = { ...v, blocked: [...v.blocked, ...(currentTitle ? [currentTitle] : [])] };
 
-  const system = (strict: boolean) => `Je vervangt een specifiek gerecht in een weekmenu. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
+  const system = (lastReason?: string) => `Je vervangt een specifiek gerecht in een weekmenu. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
 STRIKTE RICHTLIJNEN VOOR MODE "${targetMode}".
 ${MODE_RULES}
 ${availabilityRules(prefs.region)}
-VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}" en mag NIET voorkomen in de geschiedenis: ${joinOr(list(prefs.generationHistory).slice(-100), 'Geen')}.
-DEZE WEEK STAAT AL GEPLAND (NOOIT HETZELFDE OF EEN VARIANT DAARVAN KIEZEN, OOK GEEN ANDER HOOFDINGREDIËNT-PLUS-SAUS-COMBINATIE DIE EROP LIJKT): ${joinOr(blocked, 'Geen')}.${strict ? '\nLET OP: je vorige voorstel leek te veel op een gerecht dat al gepland is. Kies nu een duidelijk ander hoofdingrediënt en een andere bereidingswijze.' : ''}
+VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}".
+${varietyRules(vReplace)}
+DEZE WEEK STAAT AL GEPLAND (NOOIT HETZELFDE OF EEN VARIANT DAARVAN KIEZEN, OOK GEEN ANDER HOOFDINGREDIËNT-PLUS-SAUS-COMBINATIE DIE EROP LIJKT): ${joinOr(weekTitles, 'Geen')}.${fullMains.length ? `
+NIET ALS HOOFDINGREDIËNT (komt deze week al vaak voor): ${fullMains.join(', ')}.` : ''}${fullCuisines.length ? `
+LIEVER NIET UIT DEZE KEUKEN: ${fullCuisines.join(', ')}.` : ''}${lastReason ? `
+LET OP: je vorige voorstel werd afgekeurd (${lastReason}). Kies nu een duidelijk ander hoofdingrediënt en een andere bereidingswijze.` : ''}
 SMAAKVOORKEUR: De gebruiker vindt dit lekker: ${joinOr(favoriteTitles, 'Nog geen favorieten')}. Gebruik dit als inspiratie voor de stijl van het nieuwe gerecht.
 VOORKEUREN: Dieet: ${joinOr(prefs.diet, 'Geen')}. Tijd: Maximaal ${maxTime || '30'} min. Budget: ${prefs.budget || 'Normaal'}.
 ${tasteBlock(prefs.tasteProfile)}
 Antwoord uitsluitend met JSON in deze vorm: ${MEAL_SHAPE}`;
 
-  for (const strict of [false, true]) {
-    const meal = await aiJson(env, system(strict), `Vervang "${currentTitle}" door een nieuw gerecht in de modus ${targetMode}.`, 1.0);
-    if (!isDuplicate(meal.title, blocked)) {
+  let lastReason: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const meal = await aiJson(env, system(lastReason), `Vervang "${currentTitle}" door een nieuw gerecht in de modus ${targetMode}.`, 1.0);
+    lastReason = conflictReason(meal, weekOthers, vReplace) || undefined;
+    if (!lastReason) {
       meal.mode = targetMode;
       return meal;
     }
-    console.warn('Dubbel gerecht voorgesteld, opnieuw proberen:', meal.title);
+    console.warn(`Voorstel "${meal.title}" afgekeurd: ${lastReason}`);
   }
   throw new ApiError(409, 'Er kon geen ander gerecht gevonden worden dat nog niet in je week staat. Probeer het nog eens.');
 }
@@ -394,8 +488,11 @@ async function replaceMeal(env: Env, b: any) {
   const prefs = b.prefs || {};
   const dayIndex = Number(b.dayIndex) || 0;
   const currentTitle = b.currentMeal?.title || '';
-  const weekTitles = list(prefs.currentWeekTitles).filter((t: any, i: number) => i !== dayIndex);
-  const meal = await generateOneMeal(env, prefs, dayIndex, weekTitles, b.favoriteTitles, currentTitle);
+  const week = list(prefs.currentWeek).length
+    ? list(prefs.currentWeek)
+    : list(prefs.currentWeekTitles).map((t: any) => ({ title: t }));
+  const others = week.filter((_: any, i: number) => i !== dayIndex);
+  const meal = await generateOneMeal(env, prefs, dayIndex, others, buildVariety(b, prefs), b.favoriteTitles, currentTitle);
   await saveRecipes(env, [meal]);
   return meal;
 }

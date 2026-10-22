@@ -5,6 +5,16 @@
 // backend (Cloudflare Worker op /api). Er staat GEEN API-sleutel in de app.
 import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult } from "../types";
 import { getTasteProfile, getTasteState, needsProfileRefresh, setTasteProfile } from "../utils/tasteProfile";
+import { getRecentHistory, recordPlanned } from "../utils/mealHistory";
+
+/** Gerechten met een duim omlaag komen nooit meer terug. */
+const dislikedTitles = () => {
+  const { events } = getTasteState();
+  const disliked = new Set(events.filter(e => e.kind === 'disliked').map(e => e.title));
+  // Later toch een duim omhoog? Dan telt de laatste keuze.
+  for (const e of events) if (e.kind === 'liked' || e.kind === 'favorite') disliked.delete(e.title);
+  return [...disliked];
+};
 
 const API = '/api';
 
@@ -78,7 +88,11 @@ const refreshTasteProfile = async (language: string): Promise<string> => {
 // --- WEEKMENU -------------------------------------------------------------
 export const generateWeeklyPlan = async (prefs: UserPreferences, favoriteTitles: string[] = []): Promise<WeeklyPlan> => {
   const tasteProfile = await refreshTasteProfile(prefs?.language || 'nl-NL');
-  const data = await post('/weekly-plan', { prefs: { ...prefs, tasteProfile }, favoriteTitles });
+  const data = await post('/weekly-plan', {
+    prefs: { ...prefs, tasteProfile }, favoriteTitles,
+    history: getRecentHistory(), dislikedTitles: dislikedTitles(),
+  });
+  recordPlanned(data.days || []);
   const servings = servingsOf(prefs);
   return {
     days: (data.days || []).map((m: any, i: number) => toMeal(m, servings, prefs.dayModes?.[i] || 'premium')),
@@ -92,7 +106,9 @@ export const replaceMeal = async (currentMeal: Meal, prefs: UserPreferences, day
   const data = await post('/replace-meal', {
     currentMeal: { id: currentMeal.id, title: currentMeal.title },
     prefs: { ...prefs, tasteProfile: getTasteProfile() }, dayIndex, favoriteTitles,
+    history: getRecentHistory(), dislikedTitles: dislikedTitles(),
   });
+  recordPlanned([data]);
   return toMeal(data, servingsOf(prefs), prefs.dayModes?.[dayIndex] || 'premium');
 };
 

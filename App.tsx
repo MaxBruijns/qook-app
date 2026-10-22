@@ -551,7 +551,7 @@ export default function App() {
                     const favTitles = favMeals.map(m => m.title);
 
                     // Stuur het hele weekmenu mee, zodat het nieuwe gerecht niet al op een andere dag staat.
-                    const newMeal = await replaceMeal(oldMeal, { ...preferences, currentWeekTitles: plan.days.map(m => m.title) } as any, dayIndex, favTitles); 
+                    const newMeal = await replaceMeal(oldMeal, { ...preferences, currentWeek: plan.days.map((m: any) => ({ title: m.title, main_ingredient: m.main_ingredient, cuisine: m.cuisine })) } as any, dayIndex, favTitles); 
                     recordTaste(oldMeal.title, 'replaced');
                     const updatedDays = plan.days.map((m, i) => i === dayIndex ? newMeal : m); 
                     const newPlan = { ...plan, days: updatedDays }; 
