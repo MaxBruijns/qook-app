@@ -156,6 +156,7 @@ export const generateFullRecipe = async (meal: Meal, prefs: UserPreferences): Pr
     meal: { id: meal.id, title: meal.title, mode: meal.mode, short_description: meal.short_description,
             ai_image_prompt: meal.ai_image_prompt, calories_per_portion: meal.calories_per_portion },
     language: prefs?.language || 'nl-NL',
+    region: prefs?.region || 'NL',
   });
   const factor = servings / (data.base_servings || servings);
   const ingredients = (data.ingredients || []).map((i: any) => scaleIngredient(i, factor));
