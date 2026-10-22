@@ -26,6 +26,7 @@
 import { handleAuth, currentUser, tierOf } from './auth';
 import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
 import { recordMilestone, countReused, runTrialMails, unsubscribe, Milestone } from './engagement';
+import { handleAdmin, reportRecipe, countVisit } from './admin';
 
 interface Env {
   DB: any;            // D1-database (receptenbank)
@@ -349,7 +350,7 @@ const MIN_RECIPE_VERSION = 3;
 
 const EXTRA_COLUMNS: [string, string][] = [
   ['mode', 'TEXT'], ['main', 'TEXT'], ['cuisine', 'TEXT'], ['diet_tags', 'TEXT'], ['kid', 'INTEGER NOT NULL DEFAULT 0'],
-  ['minutes', 'INTEGER'], ['details_v', 'INTEGER NOT NULL DEFAULT 0'], ['seed_cat', 'TEXT'], ['uses', 'INTEGER NOT NULL DEFAULT 0'],
+  ['minutes', 'INTEGER'], ['details_v', 'INTEGER NOT NULL DEFAULT 0'], ['seed_cat', 'TEXT'], ['uses', 'INTEGER NOT NULL DEFAULT 0'], ['hidden', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 let schemaReady: Promise<void> | null = null;
@@ -866,7 +867,7 @@ function shortIngredients(raw: any) {
 async function bankCandidates(env: Env, prefs: any, modes: string[], limit: number): Promise<Candidate[]> {
   await ensureSchema(env);
   const diet = userDiet(prefs);
-  const where = [`mode IN (${modes.map(() => '?').join(',')})`];
+  const where = [`mode IN (${modes.map(() => '?').join(',')})`, 'hidden = 0'];   // gemelde recepten niet
   const args: any[] = [...modes];
   for (const t of diet.tags) { where.push('diet_tags LIKE ?'); args.push(`%,${t},%`); }
   if (prefs.weekProfile === 'kid_friendly') where.push(`(kid = 1 OR mode = 'culinary')`);
@@ -1635,6 +1636,15 @@ export default {
           images: env.IMAGES ? 'webp' : 'origineel',
           recipe_bank: await bankStats(env),
         });
+      }
+      const admin = await handleAdmin(request, env, path);
+      if (admin) return admin;
+      if (request.method === 'POST' && path === '/api/v') return await countVisit(env, await request.json().catch(() => ({})));
+      if (request.method === 'POST' && path === '/api/report') {
+        await ensureSchema(env);
+        const session = await currentUser(request, env).catch(() => null);
+        const who = session ? `u:${session.user.id}` : `ip:${request.headers.get('cf-connecting-ip') || 'onbekend'}`;
+        return await reportRecipe(env, who, await request.json().catch(() => ({})));
       }
       if (path === '/api/email/unsubscribe' && (request.method === 'GET' || request.method === 'POST')) {
         return await unsubscribe(env, new URL(request.url).searchParams.get('t') || '');

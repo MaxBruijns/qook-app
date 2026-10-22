@@ -389,6 +389,10 @@ footer .legal { display: flex; flex-wrap: wrap; gap: 6px 18px; }
 </footer>
 
 <script>
+  // Bezoek tellen: geen cookie, geen IP-adres; één keer per sessie.
+  try { if (!sessionStorage.getItem('qook_v')) { sessionStorage.setItem('qook_v', '1'); navigator.sendBeacon && navigator.sendBeacon('/api/v', JSON.stringify({ p: 'landing' })); } } catch (e) {}
+</script>
+<script>
   // Bedrijfsgegevens: invullen zodra ze bekend zijn; lege velden worden niet getoond.
   var BEDRIJF = { naam: '', kvk: '', email: '', privacy: '', voorwaarden: '' };
   (function () {

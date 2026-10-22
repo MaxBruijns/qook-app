@@ -153,7 +153,7 @@ export const MealCard: React.FC<{
                     </span>
                     <span className="flex items-center gap-2">
                         <Flame size={16} className={isCulinary ? 'text-white/40' : 'text-kooq-clementine'}/> 
-                        {meal.calories_per_portion} {t.unit_kcal.toUpperCase()}
+                        <span title={t.kcal_estimate}>± {meal.calories_per_portion} {t.unit_kcal.toUpperCase()}</span>
                     </span>
                 </div>
 
