@@ -218,7 +218,7 @@ const MEAL_SHAPE = `{
 }`;
 
 /** Verhoog dit als de receptregels veranderen: oudere bewaarde recepten worden dan opnieuw gemaakt. */
-const RECIPE_VERSION = 2;
+const RECIPE_VERSION = 3;
 
 const FULL_RECIPE_SHAPE = `{
   "ingredients": [{"name": "...", "amount": 0, "unit": "gram | ml | stuks | eetlepel | theelepel | teen | bosje | snufje | naar smaak"}],
@@ -239,7 +239,11 @@ const RECIPE_RULES = `KWALITEITSREGELS (controleer je recept hierop voordat je a
 6. Gebruik praktische keukenmaten: hele stuks waar logisch (1 citroen, 2 tenen knoflook), kruiden in bosjes of
    eetlepels, kleine hoeveelheden in theelepels. Zout en peper als unit "naar smaak" met amount 0.
 7. Correcte spelling en grammatica in het Nederlands (enkelvoud bij 1: "1 eetlepel").
-8. Benodigdheden bevat alleen keukengerei dat in de stappen echt gebruikt wordt.`;
+8. Benodigdheden bevat alleen keukengerei dat in de stappen echt gebruikt wordt.
+9. Noem in de stappen GEEN hoeveelheden (geen grammen, milliliters of aantallen), want de app rekent de
+   ingrediëntenlijst om naar het huishouden en de stappen niet. Verwijs naar het ingrediënt ("de boter",
+   "de bouillon") en bij verdelen naar een deel ("de helft van de boter", "de rest van de tijm").
+   Temperaturen en tijden mogen wel.`;
 
 const TIMER_RULES = `STRIKTE TIMER REGELS:
 1. NOOIT een timer voor de oven (ovens hebben eigen timers).
