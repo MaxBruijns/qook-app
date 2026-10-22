@@ -4,6 +4,7 @@
 // schermen ongewijzigd blijven. Het verschil: alle AI loopt nu via de eigen
 // backend (Cloudflare Worker op /api). Er staat GEEN API-sleutel in de app.
 import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult } from "../types";
+import { getTasteProfile, getTasteState, needsProfileRefresh, setTasteProfile } from "../utils/tasteProfile";
 
 const API = '/api';
 
@@ -55,9 +56,29 @@ export const generateMealImage = async (title: string, aiPrompt: string): Promis
   return FALLBACK_IMAGE(title);
 };
 
+// --- SMAAKPROFIEL ---------------------------------------------------------
+// Vat de recente keuzes samen tot een kort profiel. Mislukt dit, dan gaat
+// het weekmenu gewoon door met het vorige profiel.
+const refreshTasteProfile = async (language: string): Promise<string> => {
+  const current = getTasteProfile();
+  if (!needsProfileRefresh()) return current;
+  try {
+    const { events } = getTasteState();
+    const data = await post('/taste-profile', { events: events.slice(-60), previousProfile: current, language });
+    if (typeof data.profile === 'string') {
+      setTasteProfile(data.profile, true);
+      return data.profile;
+    }
+  } catch (e) {
+    console.warn('Smaakprofiel bijwerken mislukt:', e);
+  }
+  return current;
+};
+
 // --- WEEKMENU -------------------------------------------------------------
 export const generateWeeklyPlan = async (prefs: UserPreferences, favoriteTitles: string[] = []): Promise<WeeklyPlan> => {
-  const data = await post('/weekly-plan', { prefs, favoriteTitles });
+  const tasteProfile = await refreshTasteProfile(prefs?.language || 'nl-NL');
+  const data = await post('/weekly-plan', { prefs: { ...prefs, tasteProfile }, favoriteTitles });
   const servings = servingsOf(prefs);
   return {
     days: (data.days || []).map((m: any, i: number) => toMeal(m, servings, prefs.dayModes?.[i] || 'premium')),
@@ -70,7 +91,7 @@ export const generateWeeklyPlan = async (prefs: UserPreferences, favoriteTitles:
 export const replaceMeal = async (currentMeal: Meal, prefs: UserPreferences, dayIndex: number, favoriteTitles: string[] = []): Promise<Meal> => {
   const data = await post('/replace-meal', {
     currentMeal: { id: currentMeal.id, title: currentMeal.title },
-    prefs, dayIndex, favoriteTitles,
+    prefs: { ...prefs, tasteProfile: getTasteProfile() }, dayIndex, favoriteTitles,
   });
   return toMeal(data, servingsOf(prefs), prefs.dayModes?.[dayIndex] || 'premium');
 };

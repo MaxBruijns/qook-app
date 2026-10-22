@@ -11,6 +11,7 @@ import { FavoritesView } from './components/FavoritesView';
 import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult, SubscriptionStatus, DayMode, Usage } from './types';
 import { generateWeeklyPlan, generateShoppingList, analyzeFridgeImage, replaceMeal } from './services/geminiService';
 import { useTranslation, detectUserLocale } from './utils/i18n';
+import { recordTaste } from './utils/tasteProfile';
 import { Calendar, Camera, ArrowRight, User, Mail, Lock, ArrowLeft, Globe, ChevronDown, Check, PartyPopper, Loader2, Info } from 'lucide-react';
 
 function getWeekNumber(d: Date) {
@@ -102,6 +103,10 @@ export default function App() {
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
   const [shoppingList, setShoppingList] = useState<ShoppingItem[]>([]);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
+  // Favoriete gerechten zelf bewaren, zodat ze ook na een nieuw weekmenu blijven bestaan.
+  const [favoriteMeals, setFavoriteMeals] = useState<Meal[]>(() => {
+    try { return JSON.parse(localStorage.getItem('qook_favorite_meals') || '[]'); } catch { return []; }
+  });
   const [showSettings, setShowSettings] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [showTrialSuccess, setShowTrialSuccess] = useState(false);
@@ -234,7 +239,7 @@ export default function App() {
     
     try {
         // Get favorite titles for inspiration
-        const favMeals = plan?.days.filter(m => favoriteIds.includes(m.id)) || [];
+        const favMeals = allFavoriteMeals();
         const favTitles = favMeals.map(m => m.title);
 
         const p = await generateWeeklyPlan(activePrefs, favTitles);
@@ -293,12 +298,43 @@ export default function App() {
     }
   };
 
+  // Zoek een gerecht op id in alles wat de app op dit moment kent.
+  const findMeal = (mealId: string): Meal | undefined =>
+      plan?.days.find(m => m.id === mealId)
+      || scanResult?.suggestions.find(m => m.id === mealId)
+      || favoriteMeals.find(m => m.id === mealId)
+      || (selectedMeal?.id === mealId ? selectedMeal : undefined);
+
+  const allFavoriteMeals = (): Meal[] => {
+      const stored = favoriteMeals.filter(m => favoriteIds.includes(m.id));
+      const fromPlan = (plan?.days || []).filter(m => favoriteIds.includes(m.id) && !stored.some(s => s.id === m.id));
+      return [...stored, ...fromPlan];
+  };
+
   const toggleFavorite = (mealId: string) => {
+      const adding = !favoriteIds.includes(mealId);
+      const meal = findMeal(mealId);
+      if (adding && meal) recordTaste(meal.title, 'favorite');
+      setFavoriteMeals(prev => {
+          const next = adding
+              ? (meal ? [...prev.filter(m => m.id !== mealId), { ...meal, generated_image_url: meal.generated_image_url?.startsWith('data:') ? undefined : meal.generated_image_url }] : prev)
+              : prev.filter(m => m.id !== mealId);
+          try { localStorage.setItem('qook_favorite_meals', JSON.stringify(next)); } catch {}
+          return next;
+      });
       setFavoriteIds(prev => {
           const next = prev.includes(mealId) ? prev.filter(id => id !== mealId) : [...prev, mealId];
           localStorage.setItem('qook_favorites', JSON.stringify(next));
           return next;
       });
+  };
+
+  // Gerecht op de boodschappenlijst zetten of eraf halen (en onthouden als smaaksignaal).
+  const toggleShopItem = (id: string, s: boolean) => {
+      const n = new Set(selectedMealIds);
+      s ? n.add(id) : n.delete(id);
+      setSelectedMealIds(n);
+      if (s) recordTaste(findMeal(id)?.title, 'shopping');
   };
 
   const handleAgendaClick = () => {
@@ -311,6 +347,7 @@ export default function App() {
 
   // Fixed: handleStartCooking was missing, causing reference errors in MealDetail
   const handleStartCooking = (meal: Meal) => {
+    recordTaste(meal.title, 'cooked');
     setSelectedMeal(meal);
     setView('cooking');
   };
@@ -494,7 +531,7 @@ export default function App() {
             onUnlock={() => setView('register')} 
             onMealSelect={(m: Meal) => { setSelectedMeal(m); setView('meal-detail'); }} 
             selectedMealIds={selectedMealIds} 
-            onToggleShopItem={(id: string, s: boolean) => { const n = new Set(selectedMealIds); s ? n.add(id) : n.delete(id); setSelectedMealIds(n); }} 
+            onToggleShopItem={toggleShopItem} 
             onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { setShoppingList(list); setView('shopping'); setLoading(false); }); }} 
             onReplaceMeal={async (oldMeal: Meal, dayIndex: number) => { 
                 if (userStatus === 'free' || userStatus === 'basic') {
@@ -507,10 +544,11 @@ export default function App() {
                 setReplacingId(oldMeal.id); 
                 try { 
                     // Use favorite titles for replacement inspiration
-                    const favMeals = plan?.days.filter(m => favoriteIds.includes(m.id)) || [];
+                    const favMeals = allFavoriteMeals();
                     const favTitles = favMeals.map(m => m.title);
 
                     const newMeal = await replaceMeal(oldMeal, preferences, dayIndex, favTitles); 
+                    recordTaste(oldMeal.title, 'replaced');
                     const updatedDays = plan.days.map(m => m.id === oldMeal.id ? newMeal : m); 
                     const newPlan = { ...plan, days: updatedDays }; 
                     setPlan(newPlan); 
@@ -543,21 +581,21 @@ export default function App() {
           />
         )}
         {view === 'meal-detail' && selectedMeal && (
-          <MealDetail meal={selectedMeal} isPremium={userStatus !== 'free'} isFreeMeal={userStatus === 'free' && plan?.days[0]?.id === selectedMeal.id} userPrefs={preferences!} onBack={() => setView('dashboard')} onStartCooking={handleStartCooking} onShowPaywall={() => setShowPaywall(true)} onToggleList={(id, s) => { const n = new Set(selectedMealIds); s ? n.add(id) : n.delete(id); setSelectedMealIds(n); }} isSelected={selectedMealIds.has(selectedMeal.id)} onSelectSuggestion={(m) => setSelectedMeal(m)} isFavorite={favoriteIds.includes(selectedMeal.id)} onToggleFavorite={() => toggleFavorite(selectedMeal.id)} selectedMealIds={selectedMealIds} onUnlock={() => setView('register')} />
+          <MealDetail meal={selectedMeal} isPremium={userStatus !== 'free'} isFreeMeal={userStatus === 'free' && plan?.days[0]?.id === selectedMeal.id} userPrefs={preferences!} onBack={() => setView('dashboard')} onStartCooking={handleStartCooking} onShowPaywall={() => setShowPaywall(true)} onToggleList={toggleShopItem} isSelected={selectedMealIds.has(selectedMeal.id)} onSelectSuggestion={(m) => setSelectedMeal(m)} isFavorite={favoriteIds.includes(selectedMeal.id)} onToggleFavorite={() => toggleFavorite(selectedMeal.id)} selectedMealIds={selectedMealIds} onUnlock={() => setView('register')} />
         )}
         {view === 'favorites' && preferences && (
-            <FavoritesView favoriteMeals={plan?.days.filter(m => favoriteIds.includes(m.id)) || []} favoriteIds={favoriteIds} onMealSelect={(m) => { setSelectedMeal(m); setView('meal-detail'); }} onToggleFavorite={(m) => toggleFavorite(m.id)} onBack={() => setView('dashboard')} language={currentLang} isPremium={userStatus !== 'free'} hasHealthMode={userStatus === 'culinary'} selectedMealIds={selectedMealIds} onToggleShopItem={(id, s) => { const n = new Set(selectedMealIds); s ? n.add(id) : n.delete(id); setSelectedMealIds(n); }} />
+            <FavoritesView favoriteMeals={allFavoriteMeals()} favoriteIds={favoriteIds} onMealSelect={(m) => { setSelectedMeal(m); setView('meal-detail'); }} onToggleFavorite={(m) => toggleFavorite(m.id)} onBack={() => setView('dashboard')} language={currentLang} isPremium={userStatus !== 'free'} hasHealthMode={userStatus === 'culinary'} selectedMealIds={selectedMealIds} onToggleShopItem={toggleShopItem} />
         )}
         {view === 'scan-results' && scanResult && (
             <div className="p-6 max-w-5xl mx-auto space-y-6">
                 <button onClick={() => setView('choice')} className="flex items-center gap-2 text-kooq-slate font-bold"><ArrowLeft size={18}/> {t.cancel}</button>
                 <h2 className="text-2xl font-sans font-black text-kooq-dark tracking-tighter">{t.scan_results_title}</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {scanResult.suggestions.map(m => ( <Dashboard.MealCard key={m.id} meal={m} onClick={() => { setSelectedMeal(m); setView('meal-detail'); }} selectedMealIds={selectedMealIds} onToggleShopItem={(id, s) => { const n = new Set(selectedMealIds); s ? n.add(id) : n.delete(id); setSelectedMealIds(n); }} t={t} language={currentLang} /> ))}
+                    {scanResult.suggestions.map(m => ( <Dashboard.MealCard key={m.id} meal={m} onClick={() => { setSelectedMeal(m); setView('meal-detail'); }} selectedMealIds={selectedMealIds} onToggleShopItem={toggleShopItem} t={t} language={currentLang} /> ))}
                 </div>
             </div>
         )}
-        {view === 'cooking' && selectedMeal && <CookingMode meal={selectedMeal} onClose={() => setView('dashboard')} language={currentLang} onFeedback={() => {}} />}
+        {view === 'cooking' && selectedMeal && <CookingMode meal={selectedMeal} onClose={() => setView('dashboard')} language={currentLang} onFeedback={(_id, rating) => recordTaste(selectedMeal.title, rating === 'up' ? 'liked' : 'disliked')} />}
         {view === 'shopping' && <ShoppingList items={shoppingList} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => i.id === id ? {...i, checked: !i.checked} : i))} language={currentLang} />}
       </main>
       {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => { setPreferences(p); triggerRegeneration(p); }} onReset={() => { localStorage.clear(); window.location.reload(); }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}

@@ -233,6 +233,16 @@ const MODE_RULES = `MODUS RICHTLIJNEN:
 
 const joinOr = (a: any, fallback: string) => (list(a).length ? list(a).join(', ') : fallback);
 
+/** Smaakprofiel als extra blok in de AI-opdracht (leeg als er nog niets geleerd is). */
+const tasteBlock = (profile: any) => {
+  const p = typeof profile === 'string' ? profile.trim().slice(0, 1200) : '';
+  return p
+    ? `SMAAKPROFIEL (geleerd uit eerdere keuzes van deze gebruiker, weegt zwaar mee):
+${p}
+Stem de gerechten hierop af, maar blijf verrassen: ongeveer 1 op de 7 gerechten mag iets nieuws zijn dat goed bij dit profiel past.`
+    : '';
+};
+
 // ---------------------------------------------------------------------------
 // Endpoints
 // ---------------------------------------------------------------------------
@@ -259,6 +269,8 @@ ZERO-WASTE INSTRUCTIE:
 - Schrijf een kort 'zero_waste_report' waarin je uitlegt hoe je deze week verspilling voorkomt.
 
 ${MODE_RULES}
+
+${tasteBlock(prefs.tasteProfile)}
 
 VOORWAARDEN:
 - Dieet: ${joinOr(prefs.diet, 'Geen')}
@@ -289,6 +301,7 @@ ${MODE_RULES}
 VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}" en mag NIET voorkomen in de geschiedenis: ${joinOr(list(prefs.generationHistory).slice(-100), 'Geen')}.
 SMAAKVOORKEUR: De gebruiker vindt dit lekker: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik dit als inspiratie voor de stijl van het nieuwe gerecht.
 VOORKEUREN: Dieet: ${joinOr(prefs.diet, 'Geen')}. Tijd: Maximaal ${maxTime || '30'} min. Budget: ${prefs.budget || 'Normaal'}.
+${tasteBlock(prefs.tasteProfile)}
 Antwoord uitsluitend met JSON in deze vorm: ${MEAL_SHAPE}`;
 
   const meal = await aiJson(env, system, `Vervang "${currentTitle}" door een nieuw gerecht in de modus ${targetMode}.`, 1.0);
@@ -382,6 +395,40 @@ Antwoord uitsluitend met JSON: {"reply": "...", "diet": null}`;
   return { reply: data.reply || '', diet: Array.isArray(data.diet) ? data.diet : null };
 }
 
+const SIGNAL_LABELS: Record<string, string> = {
+  liked: 'duim omhoog na koken (sterk positief)',
+  favorite: 'als favoriet bewaard (sterk positief)',
+  cooked: 'gekookt (positief)',
+  shopping: 'op boodschappenlijst gezet (licht positief)',
+  replaced: 'weggeklikt / vervangen (licht negatief)',
+  disliked: 'duim omlaag na koken (sterk negatief)',
+};
+
+/** Vat de keuzes van een gebruiker samen tot een kort smaakprofiel. */
+async function tasteProfile(env: Env, b: any) {
+  const events = list(b.events).slice(-60)
+    .filter((e: any) => e && typeof e.title === 'string' && SIGNAL_LABELS[e.kind])
+    .map((e: any) => `- ${String(e.title).slice(0, 120)}: ${SIGNAL_LABELS[e.kind]}`);
+  const previous = typeof b.previousProfile === 'string' ? b.previousProfile.slice(0, 1200) : '';
+  if (!events.length) return { profile: previous };
+
+  const system = `Je analyseert de kookkeuzes van een gebruiker van de Qook-app en schrijft een kort smaakprofiel
+in het ${langName(b.language)}, dat een chef gebruikt om toekomstige weekmenu's beter af te stemmen.
+
+REGELS:
+- Maximaal 80 woorden, in korte puntjes ("- ...").
+- Alleen culinaire smaak: keukens, smaken (pittig, fris, romig), ingrediënten die wel/niet in de smaak vallen,
+  type gerechten (ovenschotel, soep, salade), gewenste moeite en kooktijd.
+- Sterke signalen wegen zwaarder dan lichte. Nieuwe signalen wegen zwaarder dan oude.
+- Trek GEEN conclusies over gezondheid, allergieën, geloof, gewicht of andere persoonlijke kenmerken.
+- Neem bruikbare punten uit het vorige profiel over, tenzij nieuwe keuzes ze tegenspreken.
+- Schrijf alleen wat uit de keuzes blijkt; verzin niets.
+Antwoord uitsluitend met JSON: {"profile": "..."}`;
+  const prompt = `VORIG PROFIEL:\n${previous || '(nog geen)'}\n\nKEUZES (oud naar nieuw):\n${events.join('\n')}`;
+  const data = await aiJson(env, system, prompt, 0.3);
+  return { profile: typeof data.profile === 'string' ? data.profile.slice(0, 1200) : previous };
+}
+
 async function serveImage(env: Env, name: string) {
   const obj = await env.PHOTOS.get(`meals/${name}`);
   if (!obj) return new Response('Niet gevonden', { status: 404 });
@@ -401,6 +448,7 @@ const POST_ROUTES: Record<string, (env: Env, body: any) => Promise<any>> = {
   '/api/fridge-scan': analyzeFridge,
   '/api/chat': chat,
   '/api/meal-image': getOrCreateImage,
+  '/api/taste-profile': tasteProfile,
 };
 
 export default {
