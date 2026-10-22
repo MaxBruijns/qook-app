@@ -21,6 +21,7 @@ interface Props {
   onLogin?: () => void;
   onLogout?: () => void;
   onDeleteAccount?: (password: string) => void;
+  onToggleMarketing?: (on: boolean) => void;
 }
 
 const REGIONS: { val: Region, label: string }[] = [
@@ -91,7 +92,7 @@ const CounterControls = ({ value, onChange }: { value: number, onChange: (v: num
   </div>
 );
 
-export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, onUpdate, onReset, onUnlock, userStatus, onShowPaywall, account, onLogin, onLogout, onDeleteAccount }) => {
+export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, onUpdate, onReset, onUnlock, userStatus, onShowPaywall, account, onLogin, onLogout, onDeleteAccount, onToggleMarketing }) => {
   const { t } = useTranslation(preferences.language);
   const [localPrefs, setLocalPrefs] = useState<UserPreferences>(preferences);
   const [showWarning, setShowWarning] = useState(false);
@@ -381,6 +382,10 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                  {account ? (
                      <div className="space-y-3">
                          <p className="text-sm text-kooq-dark">{t.logged_in_as} <span className="font-sans font-black">{account.name}</span><br /><span className="text-kooq-slate">{account.email}</span></p>
+                         <label className="flex items-start gap-3 text-xs text-kooq-slate cursor-pointer">
+                             <input id="settings-marketing" type="checkbox" defaultChecked={!!account.marketing} onChange={e => onToggleMarketing?.(e.target.checked)} className="mt-0.5 w-4 h-4 accent-kooq-sage" />
+                             <span>{t.marketing_opt_in}</span>
+                         </label>
                          <Button onClick={onLogout} variant="secondary" className="w-full py-4">{t.logout}</Button>
                          <button onClick={() => { const pw = prompt(t.delete_account_confirm); if (pw) onDeleteAccount?.(pw); }} className="w-full text-center text-[11px] text-red-500 hover:text-red-600 underline underline-offset-4">{t.delete_account}</button>
                      </div>

@@ -14,6 +14,12 @@
  *  - RESEND_API_KEY + MAIL_FROM: e-mail versturen voor "wachtwoord vergeten" (vereist een eigen domein).
  */
 
+import { mailReady, sendMail as sendMailRaw } from './mail';
+import { ensureEngagementSchema, loadStats, recordMilestone, isClientMilestone } from './engagement';
+
+const sendMail = (env: AuthEnv, to: string, subject: string, text: string) =>
+  sendMailRaw(env, to, subject, text).catch(() => { throw new AuthError(502, 'De e-mail kon niet verstuurd worden. Probeer het later opnieuw.'); });
+
 export interface AuthEnv {
   DB: any;
   PASSWORD_ITERATIONS?: string;
@@ -237,7 +243,7 @@ export function tierOf(u: any): 'visitor' | 'free' | 'basic' | 'trial' | 'premiu
 const publicUser = (u: any) => {
   const tier = tierOf(u);
   return {
-    name: u.name, email: u.email,
+    name: u.name, email: u.email, marketing: !!u.marketing_opt_in,
     subscription: tier === 'trial' ? 'premium' : tier,
     trial_started_at: tier === 'trial' ? u.trial_started_at : null,
   };
@@ -271,24 +277,6 @@ async function saveData(env: AuthEnv, userId: string, items: any) {
 }
 
 // ---------------------------------------------------------------------------
-// E-mail (wachtwoord vergeten) via Resend — alleen als het is ingesteld
-// ---------------------------------------------------------------------------
-const mailReady = (env: AuthEnv) => !!(env.RESEND_API_KEY && env.MAIL_FROM);
-
-async function sendMail(env: AuthEnv, to: string, subject: string, text: string) {
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ from: env.MAIL_FROM, to: [to], subject, text }),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!res.ok) {
-    console.error('Mail versturen mislukt', res.status, (await res.text()).slice(0, 300));
-    throw new AuthError(502, 'De e-mail kon niet verstuurd worden. Probeer het later opnieuw.');
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
 async function register(req: Request, env: AuthEnv, b: any) {
@@ -315,8 +303,11 @@ async function register(req: Request, env: AuthEnv, b: any) {
   await countAttempt(env, `reg:${ip}`, 60);
   // Wat de bezoeker al in de app had (instellingen, weekmenu, ...) gaat mee naar het account.
   if (b.data && typeof b.data === 'object') await saveData(env, id, b.data).catch(e => console.warn('Gegevens meenemen mislukt', e?.message));
-  const user = { id, email, name, subscription: 'trial', trial_started_at: trial };
-  return json({ user: publicUser(user), data: await loadData(env, id) }, 201, { 'set-cookie': await createSession(env, id) });
+  const marketing = b.marketing === true;
+  if (marketing) await env.DB.prepare('UPDATE users SET marketing_opt_in = 1 WHERE id = ?').bind(id).run();
+  const user = { id, email, name, subscription: 'trial', trial_started_at: trial, marketing_opt_in: marketing ? 1 : 0 };
+  return json({ user: publicUser(user), data: await loadData(env, id), stats: await loadStats(env.DB, id) }, 201,
+    { 'set-cookie': await createSession(env, id) });
 }
 
 async function login(req: Request, env: AuthEnv, b: any) {
@@ -346,7 +337,8 @@ async function login(req: Request, env: AuthEnv, b: any) {
     updates.push(env.DB.prepare('UPDATE users SET password = ? WHERE id = ?').bind(await hashPassword(env, password), user.id));
   }
   await env.DB.batch(updates);
-  return json({ user: publicUser(user), data: await loadData(env, user.id) }, 200, { 'set-cookie': await createSession(env, user.id) });
+  return json({ user: publicUser(user), data: await loadData(env, user.id), stats: await loadStats(env.DB, user.id) }, 200,
+    { 'set-cookie': await createSession(env, user.id) });
 }
 
 async function logout(req: Request, env: AuthEnv) {
@@ -402,6 +394,8 @@ async function deleteAccount(env: AuthEnv, user: any, b: any) {
     env.DB.prepare('DELETE FROM user_data WHERE user_id = ?').bind(user.id),
     env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id),
     env.DB.prepare('DELETE FROM password_resets WHERE user_id = ?').bind(user.id),
+    env.DB.prepare('DELETE FROM user_milestones WHERE user_id = ?').bind(user.id),
+    env.DB.prepare('DELETE FROM email_log WHERE user_id = ?').bind(user.id),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id),
   ]);
   return json({ ok: true }, 200, { 'set-cookie': sessionCookie('', 0) });
@@ -412,6 +406,7 @@ export async function handleAuth(req: Request, env: AuthEnv, path: string): Prom
   if (!path.startsWith('/api/auth/') && !path.startsWith('/api/account/')) return null;
   try {
     await ensureAuthSchema(env);
+    await ensureEngagementSchema(env.DB);
     if (req.method !== 'GET' && !sameOrigin(req)) throw new AuthError(403, 'Niet toegestaan');
     const body: any = req.method === 'GET' ? {} : await req.json().catch(() => ({}));
 
@@ -426,7 +421,8 @@ export async function handleAuth(req: Request, env: AuthEnv, path: string): Prom
     const headers: Record<string, string> = session?.refresh ? { 'set-cookie': session.refresh } : {};
     if (req.method === 'GET' && path === '/api/auth/me') {
       if (!session) return json({ user: null });
-      return json({ user: publicUser(session.user), data: await loadData(env, session.user.id) }, 200, headers);
+      return json({ user: publicUser(session.user), data: await loadData(env, session.user.id),
+        stats: await loadStats(env.DB, session.user.id) }, 200, headers);
     }
     if (!session) throw new AuthError(401, 'Je bent niet (meer) ingelogd.');
     if (req.method === 'PUT' && path === '/api/account/data') {
@@ -440,6 +436,17 @@ export async function handleAuth(req: Request, env: AuthEnv, path: string): Prom
       return json({ ok: true, subscription: tier }, 200, headers);
     }
     if (req.method === 'POST' && path === '/api/account/delete') return await deleteAccount(env, session.user, body);
+    if (req.method === 'POST' && path === '/api/account/marketing') {
+      const optIn = body.opt_in === true;
+      await env.DB.prepare('UPDATE users SET marketing_opt_in = ? WHERE id = ?').bind(optIn ? 1 : 0, session.user.id).run();
+      return json({ ok: true, marketing: optIn }, 200, headers);
+    }
+    if (req.method === 'POST' && path === '/api/account/milestone') {
+      // Alleen mijlpalen die de app zelf meldt (gekookt, duim omhoog); de rest telt de server zelf.
+      if (!isClientMilestone(body.key)) throw new AuthError(400, 'Onbekende mijlpaal');
+      await recordMilestone(env.DB, `u:${session.user.id}`, body.key);
+      return json({ ok: true }, 200, headers);
+    }
     return json({ detail: 'Niet gevonden' }, 404);
   } catch (e: any) {
     if (e instanceof AuthError) return json({ detail: e.message }, e.status);

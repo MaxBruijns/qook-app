@@ -25,6 +25,7 @@
 
 import { handleAuth, currentUser, tierOf } from './auth';
 import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
+import { recordMilestone, countReused, runTrialMails, unsubscribe, Milestone } from './engagement';
 
 interface Env {
   DB: any;            // D1-database (receptenbank)
@@ -36,6 +37,7 @@ interface Env {
   TEXT_MODEL?: string;
   RECIPE_MODEL?: string;
   ADMIN_KEY?: string;
+  APP_URL?: string;    // adres van de site voor links in e-mails (standaard het workers.dev-adres)
   SEED_DETAILS_PER_RUN?: string;
   SEED_IMAGES_PER_RUN?: string;
   PASSWORD_ITERATIONS?: string;
@@ -1403,7 +1405,7 @@ function aggregateShopping(recipes: { details: any; factor: number }[]) {
   return items;
 }
 
-async function shoppingList(env: Env, b: any) {
+async function shoppingList(env: Env, b: any, _ctx?: Ctx, actor?: Actor) {
   const servings = Math.max(1, Number(b.servings) || 2);
   const meals = list(b.meals).slice(0, 14);
   const rows = await Promise.all(meals.map((m: any) => findRecipe(env, m.id, m.title)));
@@ -1416,6 +1418,9 @@ async function shoppingList(env: Env, b: any) {
   if (meals.length && !ok.length) throw new ApiError(503, 'De recepten konden nu niet geladen worden. Probeer het zo nog eens.');
 
   const items: any[] = aggregateShopping(ok.map(d => ({ details: d, factor: servings / BASE_SERVINGS })));
+  // Hoeveel ingrediënten in meer dan één gerecht terugkomen: voor "zoveel hergebruik" in de proefbanner.
+  if (actor) await recordMilestone(env.DB, actor.who, 'reused',
+    countReused(ok.map((d: any) => list(d.ingredients).map((i: any) => String(i.name || ''))))).catch(() => {});
   meals.forEach((m: any, i: number) => {
     if (!details[i]) items.push({ name: `${m.title || 'Gerecht'} (recept volgt, nog aanvullen)`, amount: 0, unit: '', category: 'Overig' });
   });
@@ -1590,6 +1595,12 @@ async function bankStats(env: Env) {
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
+/** Mijlpalen voor de proefbanner en de e-mails (alleen ingelogde gebruikers, alleen aantallen). */
+const MILESTONE_ROUTES: Record<string, Milestone> = {
+  '/api/weekly-plan': 'plans', '/api/shopping-list': 'lists', '/api/full-recipe': 'recipes',
+  '/api/replace-meal': 'replaced', '/api/fridge-scan': 'scans',
+};
+
 const POST_ROUTES: Record<string, (env: Env, body: any, ctx?: Ctx, actor?: Actor) => Promise<any>> = {
   '/api/weekly-plan': weeklyPlan,
   '/api/replace-meal': replaceMeal,
@@ -1625,6 +1636,9 @@ export default {
           recipe_bank: await bankStats(env),
         });
       }
+      if (path === '/api/email/unsubscribe' && (request.method === 'GET' || request.method === 'POST')) {
+        return await unsubscribe(env, new URL(request.url).searchParams.get('t') || '');
+      }
       if (request.method === 'POST' && path === '/api/admin/seed') {
         if (!env.ADMIN_KEY || request.headers.get('x-admin-key') !== env.ADMIN_KEY) return json({ detail: 'Niet gevonden' }, 404);
         const body: any = await request.json().catch(() => ({}));
@@ -1646,6 +1660,8 @@ export default {
         if (action) await checkLimit(env.DB, actor, action);
         const result = await handler(env, body, ctx, actor);
         if (action) await countUse(env.DB, actor, action);
+        const milestone = MILESTONE_ROUTES[path];
+        if (milestone) await recordMilestone(env.DB, actor.who, milestone).catch(e => console.warn('Mijlpaal mislukt', errMsg(e)));
         return json(result);
       }
       return json({ detail: 'Niet gevonden' }, 404);
@@ -1660,7 +1676,9 @@ export default {
   /** Geplande taak: receptenbank aanvullen. */
   async scheduled(_controller: any, env: Env, ctx: Ctx) {
     const run = seedRound(env).then(s => console.log('Receptenbank aangevuld:', JSON.stringify(s)))
-      .finally(() => cleanupCounters(env.DB).catch(() => {}));
+      .finally(() => cleanupCounters(env.DB).catch(() => {}))
+      .finally(() => runTrialMails(env).then(r => { if (r.sent) console.log('Proef-e-mails:', JSON.stringify(r)); })
+        .catch(e => console.warn('Proef-e-mails mislukt', errMsg(e))));
     if (ctx?.waitUntil) ctx.waitUntil(run); else await run;
   },
 };

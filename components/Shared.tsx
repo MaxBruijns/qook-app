@@ -203,3 +203,38 @@ export const Notices: React.FC = () => {
     </div>
   );
 };
+
+/** Laatste dagen van de proef: wat je houdt, wat je kwijtraakt, en het aanbod. */
+export const TrialEndingModal: React.FC<{ isOpen: boolean; daysLeft: number; stats?: Partial<Record<string, number>>;
+  language: string; onClose: () => void; onChoose: () => void }> = ({ isOpen, daysLeft, stats, language, onClose, onChoose }) => {
+  const { t } = useTranslation(language);
+  if (!isOpen) return null;
+  const title = daysLeft <= 0 ? t.trial_end_today : daysLeft === 1 ? t.trial_end_tomorrow : t.trial_end_days.replace('{n}', String(daysLeft));
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-kooq-dark/70 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="trial-end-title">
+      <div className="bg-white rounded-[2.5rem] p-8 max-w-md w-full space-y-6 shadow-2xl animate-in zoom-in duration-300">
+        <div className="space-y-2">
+          <h2 id="trial-end-title" className="text-2xl font-sans font-black text-kooq-dark tracking-tighter">{title}</h2>
+          {stats && (stats.lists || stats.plans) ? (
+            <p className="text-sm text-kooq-slate">{t.trial_stats.replace('{plans}', String(stats.plans || 0)).replace('{lists}', String(stats.lists || 0)).replace('{reused}', String(stats.reused || 0))}</p>
+          ) : null}
+        </div>
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="space-y-2">
+            <p className="text-[10px] font-sans font-black uppercase tracking-widest text-kooq-sage">{t.trial_keep}</p>
+            <ul className="space-y-1 text-kooq-dark">{String(t.trial_keep_list).split('|').map((x: string) => <li key={x}>{x}</li>)}</ul>
+          </div>
+          <div className="space-y-2">
+            <p className="text-[10px] font-sans font-black uppercase tracking-widest text-kooq-clementine">{t.trial_lose}</p>
+            <ul className="space-y-1 text-kooq-slate">{String(t.trial_lose_list).split('|').map((x: string) => <li key={x}>{x}</li>)}</ul>
+          </div>
+        </div>
+        <p className="text-sm text-kooq-dark bg-kooq-sage/10 rounded-2xl px-4 py-3">{t.trial_offer}</p>
+        <div className="flex flex-col gap-3">
+          <Button onClick={onChoose} className="w-full py-4 font-sans font-black">{t.trial_choose}</Button>
+          <button onClick={onClose} className="text-sm text-kooq-slate font-medium">{t.trial_later}</button>
+        </div>
+      </div>
+    </div>
+  );
+};

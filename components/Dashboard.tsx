@@ -185,7 +185,7 @@ export const MealCard: React.FC<{
     );
 };
 
-export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, onMealSelect, selectedMealIds, onToggleShopItem, onGenerateList, onReplaceMeal, language, dayModes, onUpdateDayMode, onRegenerate, replacingId, onShowPaywall, agendaRef, usage }: { plan: WeeklyPlan, userStatus: SubscriptionStatus, trialStartedAt?: string, onUnlock: () => void, onMealSelect: (m: Meal) => void, selectedMealIds: Set<string>, onToggleShopItem: (id: string, s: boolean) => void, onGenerateList: () => void, onReplaceMeal: (m: Meal, idx: number) => void, language: string, dayModes: Record<number, DayMode>, onUpdateDayMode: (idx: number, mode: DayMode) => void, onRegenerate: () => void, replacingId: string | null, onShowPaywall: () => void, agendaRef: React.RefObject<HTMLElement | null>, usage: Usage }) {
+export default function Dashboard({ plan, userStatus, trialStartedAt, trialStats, onUnlock, onMealSelect, selectedMealIds, onToggleShopItem, onGenerateList, onReplaceMeal, language, dayModes, onUpdateDayMode, onRegenerate, replacingId, onShowPaywall, agendaRef, usage }: { plan: WeeklyPlan, userStatus: SubscriptionStatus, trialStartedAt?: string, trialStats?: Partial<Record<string, number>>, onUnlock: () => void, onMealSelect: (m: Meal) => void, selectedMealIds: Set<string>, onToggleShopItem: (id: string, s: boolean) => void, onGenerateList: () => void, onReplaceMeal: (m: Meal, idx: number) => void, language: string, dayModes: Record<number, DayMode>, onUpdateDayMode: (idx: number, mode: DayMode) => void, onRegenerate: () => void, replacingId: string | null, onShowPaywall: () => void, agendaRef: React.RefObject<HTMLElement | null>, usage: Usage }) {
   const { t } = useTranslation(language);
   const [isAgendaExpanded, setIsAgendaExpanded] = useState(false);
   const [reportDismissedFor, setReportDismissedFor] = useState<string | null>(null);
@@ -218,7 +218,11 @@ export default function Dashboard({ plan, userStatus, trialStartedAt, onUnlock, 
                 </div>
                 <div>
                     <h3 className="text-lg font-sans font-black text-kooq-dark tracking-tighter leading-tight">{isVisitor ? t.discover_free : `${t.trial_active_badge} · ${t.trial_days_left.replace('{n}', String(trialDaysLeft))}`}</h3>
-                    <p className="text-[10px] font-sans font-black text-kooq-slate uppercase tracking-widest opacity-70">{t.premium_features_limit}</p>
+                    {inTrial && trialStats && (trialStats.plans || trialStats.lists) ? (
+                        <p className="text-xs text-kooq-slate mt-1">{t.trial_stats.replace('{plans}', String(trialStats.plans || 0)).replace('{lists}', String(trialStats.lists || 0)).replace('{reused}', String(trialStats.reused || 0))}</p>
+                    ) : (
+                        <p className="text-[10px] font-sans font-black text-kooq-slate uppercase tracking-widest opacity-70">{t.premium_features_limit}</p>
+                    )}
                 </div>
             </div>
             <div className="flex gap-4">
