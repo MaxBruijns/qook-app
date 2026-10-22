@@ -536,7 +536,8 @@ UITLEG VELDEN:
   linzen = peulvruchten. Vegetarisch zonder duidelijk eiwit: groenten, pasta, rijst of aardappel.
 - kid_friendly: true als kinderen van 4-12 jaar het lusten: mild (niet pittig), geen alcohol, herkenbaar.`;
 
-const SHOP_CATEGORIES = ['Groente & fruit', 'Vlees, vis & vega', 'Zuivel, kaas & eieren', 'Brood & bakkerij',
+/** In de looproute van een gemiddelde Nederlandse supermarkt: groente bij de ingang, diepvries als laatste. */
+const SHOP_CATEGORIES = ['Groente & fruit', 'Brood & bakkerij', 'Vlees, vis & vega', 'Zuivel, kaas & eieren',
   'Pasta, rijst & granen', 'Conserven & sauzen', 'Kruiden & specerijen', 'Olie, azijn & bakproducten', 'Diepvries', 'Overig'];
 
 const FULL_RECIPE_SHAPE = `{
@@ -611,13 +612,62 @@ const WEEK_PROFILE_RULES: Record<string, string> = {
   surprise: 'Verrassing: een avontuurlijke, gevarieerde mix gekozen door de chef.',
 };
 
+// ---------------------------------------------------------------------------
+// Besparing: één keer per week boodschappen, weinig weggooien
+// ---------------------------------------------------------------------------
+/** Zero-waste-stand die bij het budget hoort (de gebruiker kan hem zelf aanpassen, maar niet onder 40%). */
+const BUDGET_ZERO_WASTE: Record<string, number> = { Laag: 80, Normaal: 65, Luxe: 50 };
+const MIN_ZERO_WASTE = 40;
+function zeroWaste(prefs: any) {
+  const own = Number(prefs.zeroWasteLevel);
+  const level = prefs.zeroWasteLevel !== undefined && prefs.zeroWasteLevel !== null && Number.isFinite(own)
+    ? own : BUDGET_ZERO_WASTE[prefs.budget] ?? 65;
+  return Math.min(100, Math.max(MIN_ZERO_WASTE, Math.round(level)));
+}
+
+const BUDGET_RULES: Record<string, string> = {
+  Laag: 'Laag: goedkope basis (peulvruchten, kip, eieren, seizoensgroente, aardappel, rijst, pasta), huismerkproducten, '
+    + 'weinig losse kruiden of specerijen die je maar één keer gebruikt, geen dure stukken vlees of vis.',
+  Normaal: 'Normaal: gangbare supermarktproducten, af en toe iets bijzonders.',
+  Luxe: 'Luxe: hoogwaardige ingrediënten mogen (betere stukken vlees, verse vis), maar zonder halve verpakkingen die overblijven.',
+};
+
+/** De kern van Qook: één keer per week boodschappen doen (op dag 0) en zo min mogelijk weggooien. */
+const weeklyShoppingRules = (prefs: any) => `BOODSCHAPPEN 1x PER WEEK (de kern van Qook: besparen en niets weggooien):
+- De gebruiker doet op dag 0 boodschappen voor de hele week.
+- Bederfelijk (verse vis, schaaldieren, gehakt, kip, bladgroente, verse kruiden, zacht fruit) vroeg in de week;
+  houdbaar (kool, wortel, ui, aardappel, pompoen, peulvruchten, blik, diepvries, harde kaas) later in de week.
+- Zero-waste ${zeroWaste(prefs)}% (hoe hoger, hoe meer hergebruik): wat anders halfvol overblijft (rest van de prei,
+  room, zak spinazie, bosje kruiden, halve bloemkool) komt terug in een ÁNDER gerecht later in de week.
+  Hergebruik nooit zo dat de week eentonig wordt: elk gerecht blijft duidelijk anders.`;
+
+/** Hoe snel het hoofdingrediënt bederft (hoger = eerder in de week koken). */
+const PERISHABILITY: Record<string, number> = {
+  zeevruchten: 5, witvis: 5, zalm: 5, vis: 5, tonijn: 4, gehakt: 4, kip: 4, kalkoen: 4, eend: 3, paddenstoelen: 3,
+  rundvlees: 3, varkensvlees: 3, lamsvlees: 3, wild: 3, groenten: 2, tofu: 2, kaas: 1, ei: 1,
+  aardappel: 0, peulvruchten: 0, pasta: 0, rijst: 0,
+};
+
+/** Binnen dagen met dezelfde modus en kooktijd: bederfelijke gerechten eerst. */
+function orderByFreshness(days: any[], plans: DayPlan[]) {
+  const groups = new Map<string, number[]>();
+  plans.forEach((p, i) => { const k = `${p.mode}|${p.maxTime}`; groups.set(k, [...(groups.get(k) || []), i]); });
+  const out = [...days];
+  const score = (m: any) => PERISHABILITY[canonMain(m?.main_ingredient)] ?? 2;
+  for (const idx of groups.values()) {
+    const meals = idx.map(i => days[i]).sort((a, c) => score(c) - score(a));
+    idx.forEach((i, k) => { out[i] = meals[k]; });
+  }
+  return out;
+}
+
 /** Voorkeuren uit de onboarding en instellingen. */
 function conditionsBlock(prefs: any) {
   const kitchens = list(prefs.kitchenProfiles);
   return `VOORWAARDEN:
 - Dieet: ${joinOr(prefs.diet, 'Geen')}${prefs.customDiet ? ` (${String(prefs.customDiet).slice(0, 200)})` : ''}
 - Huishouden: ${prefs.adultsCount ?? 2} volwassenen, ${prefs.childrenCount ?? 0} kinderen.
-- Budget: ${prefs.budget || 'Normaal'}.
+- Budget: ${BUDGET_RULES[prefs.budget] || BUDGET_RULES.Normaal}
 - Weekprofiel: ${WEEK_PROFILE_RULES[prefs.weekProfile] || WEEK_PROFILE_RULES.surprise}${kitchens.length ? `
 - Favoriete keukens: ${kitchens.join(', ')}. Kies vooral hieruit, maar wissel binnen de week af.` : ''}`;
 }
@@ -775,7 +825,15 @@ const MIN_POOL = 10;
 
 interface Candidate {
   id: string; title: string; mode: string; main_ingredient: string; cuisine: string;
-  kid: boolean; minutes: number; score: number;
+  kid: boolean; minutes: number; score: number; ingredients?: string;
+}
+
+/** De belangrijkste ingrediënten van een gerecht (zonder zout, peper, olie en water), voor de AI-keuze. */
+const STAPLE = /^(zout|zeezout|peper|zwarte peper|water|olie|olijfolie|zonnebloemolie|boter|suiker)$/;
+function shortIngredients(raw: any) {
+  if (!raw) return '';
+  return String(raw).split('|').map(n => n.replace(/\(.*?\)/g, '').trim().toLowerCase())
+    .filter(n => n && !STAPLE.test(n)).slice(0, 7).join(', ');
 }
 
 async function bankCandidates(env: Env, prefs: any, modes: string[], limit: number): Promise<Candidate[]> {
@@ -786,12 +844,15 @@ async function bankCandidates(env: Env, prefs: any, modes: string[], limit: numb
   for (const t of diet.tags) { where.push('diet_tags LIKE ?'); args.push(`%,${t},%`); }
   if (prefs.weekProfile === 'kid_friendly') where.push(`(kid = 1 OR mode = 'culinary')`);
   const { results } = await env.DB.prepare(
-    `SELECT id, title, mode, main, cuisine, kid, minutes, has_image, details_v FROM recipes
+    `SELECT id, title, mode, main, cuisine, kid, minutes, has_image, details_v,
+       CASE WHEN details_v >= ${MIN_RECIPE_VERSION} THEN (SELECT group_concat(json_extract(j.value, '$.name'), '|')
+         FROM json_each(recipes.details, '$.ingredients') j) END AS ingr
+     FROM recipes
      WHERE ${where.join(' AND ')} ORDER BY RANDOM() LIMIT ${Number(limit) || 100}`
   ).bind(...args).all();
   return (results || []).map((r: any) => ({
     id: r.id, title: r.title, mode: r.mode, main_ingredient: r.main || '', cuisine: r.cuisine || '',
-    kid: !!r.kid, minutes: Number(r.minutes) || 30,
+    kid: !!r.kid, minutes: Number(r.minutes) || 30, ingredients: shortIngredients(r.ingr),
     score: (r.has_image ? 0.5 : 0) + (Number(r.details_v) >= MIN_RECIPE_VERSION ? 0.5 : 0),
   }));
 }
@@ -835,12 +896,14 @@ REGELS:
 ${conditionsBlock(prefs)}
 ${tasteBlock(prefs.tasteProfile)}
 
-ZERO-WASTE: level ${prefs.zeroWasteLevel ?? 50}% (0 = maximale variatie, 100 = zoveel mogelijk dezelfde verse ingrediënten
-hergebruiken). Schrijf een kort 'zero_waste_report' (1-2 zinnen) over hoe deze week verspilling voorkomt.
+${weeklyShoppingRules(prefs)}
+- Kijk daarvoor naar de ingrediënten achter elk gerecht: kies gerechten die verse ingrediënten delen.
+Schrijf een kort 'zero_waste_report' (1-2 zinnen) over hoe deze week verspilling voorkomt.
 
 Antwoord uitsluitend met JSON: {"picks": [7 nummers, voor dag 0 t/m 6], "zero_waste_report": "..."}`;
   const lines = shortlist.map((c, i) =>
-    `${i} | ${c.title} | ${c.mode} | ${c.cuisine || '-'} | ${c.main_ingredient || '-'} | ${c.minutes} min${c.kid ? ' | kindvriendelijk' : ''}`);
+    `${i} | ${c.title} | ${c.mode} | ${c.cuisine || '-'} | ${c.main_ingredient || '-'} | ${c.minutes} min${c.kid ? ' | kindvriendelijk' : ''}`
+    + (c.ingredients ? ` | ${c.ingredients}` : ''));
   const data = await aiJson(env, system, `GERECHTEN:\n${lines.join('\n')}`, 0.4, undefined, undefined,
     { timeoutMs: 20000, retries: 0 });
   return { picks: list(data.picks).map(Number), report: typeof data.zero_waste_report === 'string' ? data.zero_waste_report : '' };
@@ -913,9 +976,10 @@ async function weeklyPlan(env: Env, b: any, ctx?: Ctx) {
     if (!report) report = r.report;
   }
 
-  await saveRecipes(env, days);
-  background(ctx, () => prewarm(env, days, prefs));
-  return { days, zero_waste_report: report };
+  const ordered = orderByFreshness(days, plans);
+  await saveRecipes(env, ordered);
+  background(ctx, () => prewarm(env, ordered, prefs));
+  return { days: ordered, zero_waste_report: report };
 }
 
 /** De AI maakt gerechten voor de lege dagen (bij een lege bank: de hele week). */
@@ -936,12 +1000,10 @@ ${planned.map(m => `- ${m.title} (${m.main_ingredient || '?'}, ${m.cuisine || '?
 STRIKTE VARIATIE REGELS:
 ${varietyRules(v)}
 - INSPIRE: De gebruiker houdt van gerechten zoals: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik deze lijst om de smaakvoorkeuren te begrijpen en genereer vooral NIEUWE gerechten in diezelfde sfeer.
-${wantReport ? `
-ZERO-WASTE INSTRUCTIE:
-- Zero-Waste Level: ${prefs.zeroWasteLevel ?? 50}% (0 = maximale variatie, 100 = maximale efficiency/hergebruik ingrediënten).
-- Bij een hoog level: Gebruik grote ingrediënten (bloemkool, zak spinazie, hele kip) in meerdere gerechten verspreid over de week om verspilling te voorkomen.
-- Schrijf een kort 'zero_waste_report' waarin je uitlegt hoe je deze week verspilling voorkomt.
-` : ''}
+
+${weeklyShoppingRules(prefs)}${wantReport ? `
+- Schrijf een kort 'zero_waste_report' waarin je uitlegt hoe je deze week verspilling voorkomt.` : ''}
+
 ${MODE_RULES}
 ${availabilityRules(prefs.region)}
 
@@ -1019,6 +1081,7 @@ LIEVER NIET UIT DEZE KEUKEN: ${fullCuisines.join(', ')}.` : ''}${lastReason ? `
 LET OP: je vorige voorstel werd afgekeurd (${lastReason}). Kies nu een duidelijk ander hoofdingrediënt en een andere bereidingswijze.` : ''}
 SMAAKVOORKEUR: De gebruiker vindt dit lekker: ${joinOr(favoriteTitles, 'Nog geen favorieten')}. Gebruik dit als inspiratie voor de stijl van het nieuwe gerecht.
 VOORKEUREN: Dieet: ${joinOr(prefs.diet, 'Geen')}. Tijd: Maximaal ${maxTime || '30'} min. Budget: ${prefs.budget || 'Normaal'}.
+BOODSCHAPPEN: de gebruiker doet 1x per week boodschappen; ${dayIndex >= 4 ? 'dit is laat in de week, kies dus bij voorkeur houdbare ingrediënten (verse vis of gehakt alleen als diepvriesvariant)' : 'kies bij voorkeur ingrediënten die goed passen bij de rest van de week'}.
 ${conditionsBlock(prefs)}
 ${tasteBlock(prefs.tasteProfile)}
 Antwoord uitsluitend met JSON in deze vorm: ${MEAL_SHAPE}`;
@@ -1229,6 +1292,12 @@ function guessCategory(name: string) {
 
 interface ShopAcc { name: string; category: string; g: number; ml: number; spoonMl: number; counts: Record<string, number> }
 
+/** Wat de meeste mensen al in huis hebben: apart onderaan, zodat je niet dubbel koopt. */
+const PANTRY_CATEGORY = 'Voorraadkast: heb je dit nog in huis?';
+const PANTRY_CATS = new Set(['Kruiden & specerijen', 'Olie, azijn & bakproducten']);
+const isPantry = (a: ShopAcc) => PANTRY_CATS.has(a.category)
+  || (a.g === 0 && a.ml === 0 && !Object.keys(a.counts).length && a.category === 'Conserven & sauzen');
+
 function aggregateShopping(recipes: { details: any; factor: number }[]) {
   const acc = new Map<string, ShopAcc>();
   for (const { details, factor } of recipes) {
@@ -1253,7 +1322,8 @@ function aggregateShopping(recipes: { details: any; factor: number }[]) {
 
   const items: { name: string; amount: number; unit: string; category: string }[] = [];
   for (const [key, a] of acc) {
-    const push = (amount: number, unit: string) => items.push({ name: a.name, amount, unit, category: a.category });
+    const category = isPantry(a) ? PANTRY_CATEGORY : a.category;
+    const push = (amount: number, unit: string) => items.push({ name: a.name, amount, unit, category });
     const before = items.length;
     if (a.g > 0) { const r = shopGrams(a.g); push(r.amount, r.unit); }
     if (a.ml > 0) { const r = shopMl(a.ml + a.spoonMl); push(r.amount, r.unit); }
@@ -1269,7 +1339,7 @@ function aggregateShopping(recipes: { details: any; factor: number }[]) {
     }
     if (items.length === before) push(0, ''); // zout, peper, naar smaak: alleen de naam
   }
-  const order = (c: string) => { const i = SHOP_CATEGORIES.indexOf(c); return i < 0 ? 99 : i; };
+  const order = (c: string) => { if (c === PANTRY_CATEGORY) return 100; const i = SHOP_CATEGORIES.indexOf(c); return i < 0 ? 99 : i; };
   items.sort((x, y) => order(x.category) - order(y.category) || x.name.localeCompare(y.name, 'nl'));
   return items;
 }
