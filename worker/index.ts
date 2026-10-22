@@ -321,29 +321,81 @@ Antwoord uitsluitend met JSON: {"zero_waste_report": "...", "days": [7 gerechten
   const data = await aiJson(env, system, 'Genereer het weekmenu en het zero-waste rapport.', 0.9);
   const days = list(data.days).slice(0, 7);
   days.forEach((m: any, i: number) => { m.mode = dayModes[String(i)] || 'premium'; });
+
+  // Harde controle: geen twee keer (bijna) hetzelfde gerecht in één week.
+  const seen: string[] = [];
+  for (let i = 0; i < days.length; i++) {
+    if (isDuplicate(days[i].title, seen)) {
+      const others = days.filter((_: any, j: number) => j !== i).map((m: any) => m.title);
+      days[i] = await generateOneMeal(env, prefs, i, others, b.favoriteTitles, days[i].title);
+    }
+    seen.push(days[i].title);
+  }
+
   await saveRecipes(env, days);
   return { days, zero_waste_report: data.zero_waste_report || '' };
+}
+
+// ---------------------------------------------------------------------------
+// Dubbele gerechten voorkomen
+// ---------------------------------------------------------------------------
+const STOPWORDS = new Set(['met', 'en', 'van', 'de', 'het', 'een', 'in', 'op', 'uit', 'aan', 'bij', 'voor', 'with', 'and', 'the', 'of']);
+const normTitle = (t: any) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+const titleWords = (t: any) => new Set(normTitle(t).split(' ').filter(w => w.length > 2 && !STOPWORDS.has(w)));
+
+/** Zelfde gerecht als een van de andere? Exact gelijk, of grotendeels dezelfde woorden. */
+const isDuplicate = (title: any, others: any[]) => {
+  const n = normTitle(title);
+  if (!n) return false;
+  const a = titleWords(title);
+  return others.some(o => {
+    if (normTitle(o) === n) return true;
+    const b = titleWords(o);
+    if (!a.size || !b.size) return false;
+    // Woorden tellen als gelijk bij exacte match of als het ene woord het andere bevat
+    // ("bospaddenstoelensaus" bevat "paddenstoelensaus").
+    const same = (x: string, y: string) => x === y || (Math.min(x.length, y.length) >= 5 && (x.includes(y) || y.includes(x)));
+    const shared = [...a].filter(w => [...b].some(v => same(w, v))).length;
+    return shared / Math.min(a.size, b.size) >= 0.75;
+  });
+};
+
+/** Eén gerecht voor een dag, gegarandeerd anders dan de verboden titels (max. 2 pogingen). */
+async function generateOneMeal(env: Env, prefs: any, dayIndex: number, forbidden: string[],
+                               favoriteTitles: any, currentTitle = ''): Promise<any> {
+  const targetMode = (prefs.dayModes || {})[String(dayIndex)] || 'premium';
+  const maxTime = dayIndex >= 5 ? prefs.weekendCookingTime : prefs.cookingTime;
+  const blocked = [...new Set([currentTitle, ...forbidden].filter(Boolean))];
+
+  const system = (strict: boolean) => `Je vervangt een specifiek gerecht in een weekmenu. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
+STRIKTE RICHTLIJNEN VOOR MODE "${targetMode}".
+${MODE_RULES}
+${availabilityRules(prefs.region)}
+VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}" en mag NIET voorkomen in de geschiedenis: ${joinOr(list(prefs.generationHistory).slice(-100), 'Geen')}.
+DEZE WEEK STAAT AL GEPLAND (NOOIT HETZELFDE OF EEN VARIANT DAARVAN KIEZEN, OOK GEEN ANDER HOOFDINGREDIËNT-PLUS-SAUS-COMBINATIE DIE EROP LIJKT): ${joinOr(blocked, 'Geen')}.${strict ? '\nLET OP: je vorige voorstel leek te veel op een gerecht dat al gepland is. Kies nu een duidelijk ander hoofdingrediënt en een andere bereidingswijze.' : ''}
+SMAAKVOORKEUR: De gebruiker vindt dit lekker: ${joinOr(favoriteTitles, 'Nog geen favorieten')}. Gebruik dit als inspiratie voor de stijl van het nieuwe gerecht.
+VOORKEUREN: Dieet: ${joinOr(prefs.diet, 'Geen')}. Tijd: Maximaal ${maxTime || '30'} min. Budget: ${prefs.budget || 'Normaal'}.
+${tasteBlock(prefs.tasteProfile)}
+Antwoord uitsluitend met JSON in deze vorm: ${MEAL_SHAPE}`;
+
+  for (const strict of [false, true]) {
+    const meal = await aiJson(env, system(strict), `Vervang "${currentTitle}" door een nieuw gerecht in de modus ${targetMode}.`, 1.0);
+    if (!isDuplicate(meal.title, blocked)) {
+      meal.mode = targetMode;
+      return meal;
+    }
+    console.warn('Dubbel gerecht voorgesteld, opnieuw proberen:', meal.title);
+  }
+  throw new ApiError(409, 'Er kon geen ander gerecht gevonden worden dat nog niet in je week staat. Probeer het nog eens.');
 }
 
 async function replaceMeal(env: Env, b: any) {
   const prefs = b.prefs || {};
   const dayIndex = Number(b.dayIndex) || 0;
-  const targetMode = (prefs.dayModes || {})[String(dayIndex)] || 'premium';
-  const maxTime = dayIndex >= 5 ? prefs.weekendCookingTime : prefs.cookingTime;
   const currentTitle = b.currentMeal?.title || '';
-
-  const system = `Je vervangt een specifiek gerecht in een weekmenu. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
-STRIKTE RICHTLIJNEN VOOR MODE "${targetMode}".
-${MODE_RULES}
-${availabilityRules(prefs.region)}
-VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}" en mag NIET voorkomen in de geschiedenis: ${joinOr(list(prefs.generationHistory).slice(-100), 'Geen')}.
-SMAAKVOORKEUR: De gebruiker vindt dit lekker: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik dit als inspiratie voor de stijl van het nieuwe gerecht.
-VOORKEUREN: Dieet: ${joinOr(prefs.diet, 'Geen')}. Tijd: Maximaal ${maxTime || '30'} min. Budget: ${prefs.budget || 'Normaal'}.
-${tasteBlock(prefs.tasteProfile)}
-Antwoord uitsluitend met JSON in deze vorm: ${MEAL_SHAPE}`;
-
-  const meal = await aiJson(env, system, `Vervang "${currentTitle}" door een nieuw gerecht in de modus ${targetMode}.`, 1.0);
-  meal.mode = targetMode;
+  const weekTitles = list(prefs.currentWeekTitles).filter((t: any, i: number) => i !== dayIndex);
+  const meal = await generateOneMeal(env, prefs, dayIndex, weekTitles, b.favoriteTitles, currentTitle);
   await saveRecipes(env, [meal]);
   return meal;
 }

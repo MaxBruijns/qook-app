@@ -550,9 +550,10 @@ export default function App() {
                     const favMeals = allFavoriteMeals();
                     const favTitles = favMeals.map(m => m.title);
 
-                    const newMeal = await replaceMeal(oldMeal, preferences, dayIndex, favTitles); 
+                    // Stuur het hele weekmenu mee, zodat het nieuwe gerecht niet al op een andere dag staat.
+                    const newMeal = await replaceMeal(oldMeal, { ...preferences, currentWeekTitles: plan.days.map(m => m.title) } as any, dayIndex, favTitles); 
                     recordTaste(oldMeal.title, 'replaced');
-                    const updatedDays = plan.days.map(m => m.id === oldMeal.id ? newMeal : m); 
+                    const updatedDays = plan.days.map((m, i) => i === dayIndex ? newMeal : m); 
                     const newPlan = { ...plan, days: updatedDays }; 
                     setPlan(newPlan); 
                     localStorage.setItem('qook_current_plan', JSON.stringify(stripImages(newPlan))); 
