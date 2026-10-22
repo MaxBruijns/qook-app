@@ -28,6 +28,7 @@ import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, clea
 import { recordMilestone, countReused, runTrialMails, unsubscribe, Milestone } from './engagement';
 import { handleAdmin, reportRecipe, countVisit } from './admin';
 import { handleBilling } from './billing';
+import { handleExternal } from './external';
 
 interface Env {
   DB: any;            // D1-database (receptenbank)
@@ -1627,6 +1628,8 @@ export default {
     const path = new URL(request.url).pathname;
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
 
+    const external = await handleExternal(request, path, ctx);
+    if (external) return external;
     const billing = await handleBilling(request, env as any, path,
       async () => (await currentUser(request, env).catch(() => null))?.user || null);
     if (billing) return billing;

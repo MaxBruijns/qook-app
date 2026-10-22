@@ -72,7 +72,7 @@ export const MealDetail: React.FC<Props> = ({
     const [fullMeal, setFullMeal] = useState<Meal>(meal);
     const [loading, setLoading] = useState(false);
     
-    const [imgUrl, setImgUrl] = useState<string>(meal.generated_image_url || 'https://images.unsplash.com/photo-1543353071-873f17a7a088?q=80&w=800&auto=format&fit=crop');
+    const [imgUrl, setImgUrl] = useState<string>(meal.generated_image_url || '/api/ext/unsplash/photo-1543353071-873f17a7a088?q=80&w=800&auto=format&fit=crop');
     
     const isCulinaryMode = meal.mode === 'culinary';
     const isLocked = !isPremium && !isFreeMeal;

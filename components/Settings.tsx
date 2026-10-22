@@ -236,7 +236,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
 
       <div className="bg-white rounded-[2.5rem] max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-white/10 relative">
         <div className="absolute inset-0 z-0">
-            <img src="https://images.unsplash.com/photo-1543353071-873f17a7a088?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover opacity-20" alt="Settings background" />
+            <img src="/api/ext/unsplash/photo-1543353071-873f17a7a088?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover opacity-20" alt="Settings background" />
         </div>
 
         <div className="px-6 py-5 border-b border-kooq-slate/10 flex items-center justify-between bg-white/80 backdrop-blur-md relative z-10">

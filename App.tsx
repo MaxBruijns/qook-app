@@ -87,7 +87,7 @@ const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: Au
   return (
     <div className="min-h-screen relative flex flex-col items-center justify-center p-6 bg-kooq-white overflow-hidden">
         <div className="absolute inset-0 z-0 opacity-20">
-            <img src="https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="" />
+            <img src="/api/ext/unsplash/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="" />
         </div>
         <div className="relative z-10 w-full max-w-md space-y-8 animate-in fade-in zoom-in duration-500">
             <button onClick={onBack} className="flex items-center gap-2 text-kooq-slate font-bold mb-4 hover:text-kooq-dark transition-colors"><ArrowLeft size={18}/> {t.cancel}</button>
@@ -516,7 +516,7 @@ export default function App() {
     return (
       <div className="min-h-screen relative flex flex-col items-center justify-center p-6 text-center overflow-hidden">
         <div className="absolute inset-0 z-0">
-            <img src="https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="" />
+            <img src="/api/ext/unsplash/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="" />
             <div className="absolute inset-0 bg-kooq-white/75 backdrop-blur-sm"></div>
         </div>
         <div className="relative z-10">
@@ -564,7 +564,7 @@ export default function App() {
         </div>
 
         <div className="absolute inset-0 z-0 transition-opacity duration-1000">
-            <img src="https://images.unsplash.com/photo-1543353071-873f17a7a088?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover scale-105 opacity-85" alt="Welcome Background" />
+            <img src="/api/ext/unsplash/photo-1543353071-873f17a7a088?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover scale-105 opacity-85" alt="Welcome Background" />
             <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-white/40 backdrop-blur-[0.5px]"></div>
         </div>
         <div className="relative z-10 max-w-lg w-full space-y-12">

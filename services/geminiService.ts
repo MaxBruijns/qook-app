@@ -45,7 +45,7 @@ const toMeal = (m: any, servings: number, mode?: string): Meal => ({
 });
 
 const FALLBACK_IMAGE = (title: string) =>
-  `https://images.unsplash.com/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${encodeURIComponent(title)}`;
+  `/api/ext/unsplash/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${encodeURIComponent(title)}`;
 
 // --- MAALTIJDFOTO ---------------------------------------------------------
 // De backend maakt per gerecht één keer een foto en bewaart die.
