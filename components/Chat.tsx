@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, X, MessageCircle, Sparkles, Activity, Target, Layout, ChevronRight } from 'lucide-react';
 import { ChatMessage, UserPreferences, WeeklyPlan } from '../types';
 import { useTranslation } from '../utils/i18n';
-import { sendChatMessage } from '../services/api';
+import { sendChatMessage } from '../services/geminiService';
 
 interface Props {
   userPrefs: UserPreferences;

@@ -9,7 +9,7 @@ import { Header, PaywallModal, Button } from './components/Shared';
 import { SettingsModal } from './components/Settings';
 import { FavoritesView } from './components/FavoritesView';
 import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult, SubscriptionStatus, DayMode, Usage } from './types';
-import { generateWeeklyPlan, generateShoppingList, analyzeFridgeImage, replaceMeal } from './services/api';
+import { generateWeeklyPlan, generateShoppingList, analyzeFridgeImage, replaceMeal } from './services/geminiService';
 import { useTranslation, detectUserLocale } from './utils/i18n';
 import { Calendar, Camera, ArrowRight, User, Mail, Lock, ArrowLeft, Globe, ChevronDown, Check, PartyPopper, Loader2, Info } from 'lucide-react';
 
@@ -130,6 +130,12 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
+      try {
+        if (window.aistudio && !(await window.aistudio.hasSelectedApiKey())) {
+            await window.aistudio.openSelectKey();
+        }
+      } catch (e) {}
+
       const savedUsage = localStorage.getItem('qook_usage');
       const currentWeek = getWeekNumber(new Date());
       if (savedUsage) {

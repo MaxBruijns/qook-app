@@ -2,8 +2,9 @@
  * KOOQ — alles in één Cloudflare Worker.
  *
  *  - Serveert de website (map ./dist, gebouwd door Vite).
- *  - /api/*  : de backend.
- *  - Tekst   : Google Gemini (gratis tier) via GEMINI_API_KEY.
+ *  - /api/*  : de backend. Volgt de AI-logica van het oorspronkelijke
+ *              AI Studio-ontwerp (9 januari), maar dan veilig op de server.
+ *  - Tekst   : Google Gemini via GEMINI_API_KEY.
  *  - Foto's  : Workers AI (FLUX schnell), één keer per gerecht, bewaard in R2.
  *  - Data    : D1-database met de receptenbank.
  *
@@ -22,6 +23,8 @@ interface Env {
 }
 
 const IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';
+/** Volledige recepten worden voor dit aantal personen bewaard; de app rekent om. */
+const BASE_SERVINGS = 4;
 
 // ---------------------------------------------------------------------------
 // Hulpfuncties
@@ -36,14 +39,8 @@ class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-const langName = (code = 'nl') => {
-  const c = code.toLowerCase();
-  if (c.startsWith('nl')) return 'Dutch';
-  if (c.startsWith('de')) return 'German';
-  if (c.startsWith('fr')) return 'French';
-  if (c.startsWith('es')) return 'Spanish';
-  return 'English';
-};
+const LANGS: Record<string, string> = { nl: 'Nederlands', en: 'Engels', de: 'Duits', fr: 'Frans', es: 'Spaans' };
+const langName = (code = 'nl') => LANGS[code.toLowerCase().slice(0, 2)] || 'Engels';
 
 const parseJson = (text: string) => {
   let t = (text || '').trim();
@@ -51,10 +48,12 @@ const parseJson = (text: string) => {
   return JSON.parse(t);
 };
 
+const list = (a: any) => (Array.isArray(a) ? a : []);
+
 // ---------------------------------------------------------------------------
-// Gemini (tekst + koelkastfoto)
+// Gemini
 // ---------------------------------------------------------------------------
-async function aiJson(env: Env, system: string, prompt: string, temperature = 0.7, imageB64?: string): Promise<any> {
+async function aiJson(env: Env, system: string, prompt: string, temperature = 0.8, imageB64?: string): Promise<any> {
   if (!env.GEMINI_API_KEY) throw new ApiError(500, 'GEMINI_API_KEY ontbreekt in de Worker-instellingen');
   const model = env.TEXT_MODEL || 'gemini-2.5-flash';
   const parts: any[] = [];
@@ -74,8 +73,7 @@ async function aiJson(env: Env, system: string, prompt: string, temperature = 0.
     }),
   });
   if (!res.ok) {
-    const body = await res.text();
-    console.error('Gemini-fout', res.status, body.slice(0, 500));
+    console.error('Gemini-fout', res.status, (await res.text()).slice(0, 500));
     throw new ApiError(res.status === 429 ? 429 : 502,
       res.status === 429 ? 'De AI is even druk (daglimiet bereikt). Probeer het later opnieuw.' : 'AI-fout');
   }
@@ -91,6 +89,8 @@ async function aiJson(env: Env, system: string, prompt: string, temperature = 0.
 
 // ---------------------------------------------------------------------------
 // Receptenbank (D1)
+//   data    = het gerecht (overzichtsvelden uit het weekmenu)
+//   details = volledig recept (ingrediënten, stappen, ...), voor BASE_SERVINGS personen
 // ---------------------------------------------------------------------------
 let schemaReady: Promise<void> | null = null;
 function ensureSchema(env: Env) {
@@ -99,14 +99,8 @@ function ensureSchema(env: Env) {
       env.DB.prepare(`CREATE TABLE IF NOT EXISTS recipes (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
-        short_description TEXT,
-        ai_image_prompt TEXT,
-        ingredients TEXT,
-        steps TEXT,
-        mode TEXT,
-        diet_tags TEXT,
-        estimated_time_minutes INTEGER,
-        calories_per_portion INTEGER,
+        data TEXT NOT NULL,
+        details TEXT,
         has_image INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )`),
@@ -118,35 +112,22 @@ function ensureSchema(env: Env) {
 
 const imageUrl = (id: string) => `/api/images/${id}.jpg`;
 
-function rowToMeal(row: any) {
-  return {
-    id: row.id,
-    title: row.title,
-    short_description: row.short_description,
-    ai_image_prompt: row.ai_image_prompt,
-    ingredients: row.ingredients ? JSON.parse(row.ingredients) : [],
-    steps: row.steps ? JSON.parse(row.steps) : [],
-    mode: row.mode,
-    estimated_time_minutes: row.estimated_time_minutes,
-    calories_per_portion: row.calories_per_portion,
-    image_url: row.has_image ? imageUrl(row.id) : null,
-  };
-}
+const SUMMARY_FIELDS = ['title', 'short_description', 'ai_image_prompt', 'estimated_time_minutes', 'difficulty',
+  'calories_per_portion', 'chefs_hack', 'wine_pairing', 'plating_tips', 'mode'];
 
-/** Bewaart gerechten in de receptenbank; bestaande titels worden hergebruikt (incl. foto). */
-async function saveRecipes(env: Env, meals: any[], diet: string[]) {
+/** Bewaart gerechten in de bank. Bestaande titels worden hergebruikt (incl. foto en volledig recept). */
+async function saveRecipes(env: Env, meals: any[]) {
   await ensureSchema(env);
-  const titles = meals.map(m => String(m.title || '').trim()).filter(Boolean);
+  meals.forEach(m => { m.title = String(m.title || '').trim() || 'Gerecht'; });
+  const titles = [...new Set(meals.map(m => m.title))];
   const existing = new Map<string, any>();
-  if (titles.length) {
-    const q = `SELECT id, title, has_image FROM recipes WHERE title IN (${titles.map(() => '?').join(',')})`;
-    const { results } = await env.DB.prepare(q).bind(...titles).all();
-    for (const r of results || []) existing.set(r.title, r);
-  }
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, has_image FROM recipes WHERE title IN (${titles.map(() => '?').join(',')})`
+  ).bind(...titles).all();
+  for (const r of results || []) existing.set(r.title, r);
 
   const inserts: any[] = [];
   for (const m of meals) {
-    m.title = String(m.title || '').trim();
     const found = existing.get(m.title);
     if (found) {
       m.id = found.id;
@@ -156,17 +137,23 @@ async function saveRecipes(env: Env, meals: any[], diet: string[]) {
     m.id = crypto.randomUUID();
     m.image_url = null;
     existing.set(m.title, { id: m.id, has_image: 0 });
-    inserts.push(env.DB.prepare(
-      `INSERT INTO recipes (id, title, short_description, ai_image_prompt, ingredients, steps, mode,
-        diet_tags, estimated_time_minutes, calories_per_portion) VALUES (?,?,?,?,?,?,?,?,?,?)`
-    ).bind(
-      m.id, m.title, m.short_description ?? null, m.ai_image_prompt ?? null,
-      JSON.stringify(m.ingredients || []), JSON.stringify(m.steps || []), m.mode ?? null,
-      JSON.stringify(diet || []), Number(m.estimated_time_minutes) || null, Number(m.calories_per_portion) || null,
-    ));
+    const data: any = {};
+    for (const k of SUMMARY_FIELDS) if (m[k] !== undefined) data[k] = m[k];
+    inserts.push(env.DB.prepare('INSERT INTO recipes (id, title, data) VALUES (?, ?, ?)')
+      .bind(m.id, m.title, JSON.stringify(data)));
   }
   if (inserts.length) await env.DB.batch(inserts);
   return meals;
+}
+
+async function findRecipe(env: Env, id?: string, title?: string) {
+  await ensureSchema(env);
+  if (id) {
+    const row = await env.DB.prepare('SELECT * FROM recipes WHERE id = ?').bind(String(id)).first();
+    if (row) return row;
+  }
+  if (title) return env.DB.prepare('SELECT * FROM recipes WHERE title = ? LIMIT 1').bind(String(title).trim()).first();
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,20 +168,15 @@ function base64ToBytes(b64: string) {
   return bytes;
 }
 
-async function createImage(env: Env, recipeId: string): Promise<string> {
-  await ensureSchema(env);
-  const recipe: any = await env.DB.prepare('SELECT id, title, ai_image_prompt, has_image FROM recipes WHERE id = ?')
-    .bind(recipeId).first();
-  if (!recipe) throw new ApiError(404, 'Recept niet gevonden');
+async function createImage(env: Env, recipe: any): Promise<string> {
   if (recipe.has_image) return imageUrl(recipe.id);
-
+  const data = JSON.parse(recipe.data || '{}');
+  // Zelfde opbouw als het origineel, aangevuld voor een realistische foodfoto.
   const prompt =
-    `Professional food photography of ${recipe.title}. ${recipe.ai_image_prompt || ''} ` +
-    'Plated dish seen from a 45 degree angle, natural window light, shallow depth of field, ' +
-    'restaurant-quality plating on a ceramic plate, appetizing, realistic. No text, no watermark, no people, no hands.';
+    `A professional food photography shot of ${recipe.title}. ${data.ai_image_prompt || ''}. ` +
+    '4k, cinematic lighting. Plated dish, appetizing, realistic. No text, no watermark, no people, no hands.';
   const out: any = await env.AI.run(IMAGE_MODEL, { prompt: prompt.slice(0, 2000), steps: 6 });
   if (!out?.image) throw new ApiError(502, 'Geen afbeelding ontvangen van Workers AI');
-
   await env.PHOTOS.put(`meals/${recipe.id}.jpg`, base64ToBytes(out.image), {
     httpMetadata: { contentType: 'image/jpeg' },
   });
@@ -202,146 +184,209 @@ async function createImage(env: Env, recipeId: string): Promise<string> {
   return imageUrl(recipe.id);
 }
 
-function getOrCreateImage(env: Env, recipeId: string) {
-  let p = inflight.get(recipeId);
+async function getOrCreateImage(env: Env, b: any) {
+  const recipe = await findRecipe(env, b.recipe_id, b.title);
+  if (!recipe) throw new ApiError(404, 'Recept staat niet in de receptenbank');
+  let p = inflight.get(recipe.id);
   if (!p) {
-    p = createImage(env, recipeId).finally(() => inflight.delete(recipeId));
-    inflight.set(recipeId, p);
+    p = createImage(env, recipe).finally(() => inflight.delete(recipe.id));
+    inflight.set(recipe.id, p);
   }
-  return p;
+  return { status: 'success', url: await p };
 }
 
 // ---------------------------------------------------------------------------
-// Prompts
+// Prompts (overgenomen uit het oorspronkelijke ontwerp)
 // ---------------------------------------------------------------------------
-const MEAL_SCHEMA = `{
-  "title": "Dish name",
-  "short_description": "Appealing one-sentence description",
-  "ai_image_prompt": "Short English description of how the plated dish looks",
-  "ingredients": [{"name": "...", "amount": 0, "unit": "..."}],
-  "steps": [{"step_index": 1, "user_text": "...", "needs_timer": false, "estimated_duration_seconds": 0}],
+const MEAL_SHAPE = `{
+  "title": "naam van het gerecht",
+  "short_description": "aantrekkelijke omschrijving in één zin",
+  "ai_image_prompt": "korte Engelse beschrijving van hoe het opgemaakte bord eruitziet",
   "estimated_time_minutes": 30,
+  "difficulty": "Makkelijk | Gemiddeld | Gevorderd",
   "calories_per_portion": 600,
-  "mode": "premium"
+  "chefs_hack": "één slimme kooktip",
+  "wine_pairing": {"type": "wijnsoort", "description": "waarom deze wijn past"},
+  "plating_tips": "professionele opmaaktips (vooral voor culinary)",
+  "mode": "premium of culinary"
 }`;
 
-const CHEF_SYSTEM =
-  'You are Chef Qook, the culinary engine of the KOOQ meal-planning app. ' +
-  'You write realistic, tasty home-cooking recipes. Always answer with valid JSON only.';
+const FULL_RECIPE_SHAPE = `{
+  "ingredients": [{"name": "...", "amount": 0, "unit": "..."}],
+  "steps": [{"step_index": 1, "user_text": "...", "needs_timer": false, "timer_label": "...", "estimated_duration_seconds": 0}],
+  "supplies": ["benodigd keukengerei"],
+  "nutrition": {"calories": 0},
+  "plating_tips": "...",
+  "wine_pairing": {"type": "...", "description": "..."}
+}`;
 
-const lastN = (arr: any, n: number) => (Array.isArray(arr) ? arr.slice(-n) : []);
+const TIMER_RULES = `STRIKTE TIMER REGELS:
+1. NOOIT een timer voor de oven (ovens hebben eigen timers).
+2. NOOIT een timer voor voorbereiding (snijden, wassen, afmeten).
+3. NOOIT een timer voor 'voorverwarmen'.
+4. ALLEEN een timer voor actieve kookprocessen op het fornuis (koken, sudderen, bakken) of passieve processen (rusten, marineren) waar de exacte tijd essentieel is voor de kwaliteit.
+5. De 'timer_label' moet kort en bondig beschrijven wat er gebeurt.`;
+
+const MODE_RULES = `MODUS RICHTLIJNEN:
+- 'premium': Toegankelijke, gezonde en smaakvolle doordeweekse gerechten. Focus op eenvoud en dagelijks gemak.
+- 'culinary': LUXE Gastronomie. Focus op presentatie, verfijnde smaken en techniek.`;
+
+const joinOr = (a: any, fallback: string) => (list(a).length ? list(a).join(', ') : fallback);
 
 // ---------------------------------------------------------------------------
 // Endpoints
 // ---------------------------------------------------------------------------
 async function weeklyPlan(env: Env, b: any) {
-  const dayModes: Record<string, string> = b.dayModes || {};
-  const modes = Object.entries(dayModes).map(([d, m]) => `day ${d}: ${m}`).join(', ') || 'all days: premium';
-  const prompt = `Create a 7-day dinner menu. Write all text in ${langName(b.language)} (ai_image_prompt in English).
-- Diet: ${JSON.stringify(b.diet || [])}
-- Budget: ${b.budget || 'Normaal'}
-- Household: ${b.adultsCount ?? 2} adults, ${b.childrenCount ?? 0} children (ingredient amounts for the whole household)
-- Zero-waste level: ${b.zeroWasteLevel ?? 50}% (higher = reuse ingredients across days)
-- Day modes: ${modes} ('culinary' = chef-level, 'premium' = easy comfort food)
-- NEVER use these dishes: ${JSON.stringify(lastN(b.generationHistory, 60))}
-- Style inspiration (favorites): ${JSON.stringify(b.favorite_titles || [])}
+  const prefs = b.prefs || {};
+  const dayModes: Record<string, string> = prefs.dayModes || {};
+  const modes = Object.entries(dayModes).sort(([a], [c]) => Number(a) - Number(c))
+    .map(([d, m]) => `Day ${d}: ${m}`).join(', ');
 
-Return JSON: {"zero_waste_report": "short explanation of ingredient reuse", "days": [7 objects with "day_number" (0-6) plus these fields: ${MEAL_SCHEMA}]}`;
+  const system = `Je bent de culinaire motor van Qook (KOOQ).
+Je genereert een 7-daags menu (0-6). Schrijf alle teksten in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
 
-  const data = await aiJson(env, CHEF_SYSTEM, prompt, 0.9);
-  const days = (data.days || []).slice(0, 7);
-  days.forEach((d: any, i: number) => {
-    d.day_number ??= i;
-    if (dayModes[String(i)]) d.mode = dayModes[String(i)];
-  });
-  await saveRecipes(env, days, b.diet || []);
-  return { status: 'success', days, zero_waste_report: data.zero_waste_report || '' };
+AGENDA (STRIKT VOLGEN):
+${modes}
+
+STRIKTE VARIATIE REGELS:
+- VERMIJD de volgende gerechten (EXCLUDE): ${joinOr(list(prefs.generationHistory).slice(-100), 'Geen')}. Dit zijn gerechten die de gebruiker al gepland heeft. Wees creatief en kom met iets nieuws.
+- INSPIRE: De gebruiker houdt van gerechten zoals: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik deze lijst om de smaakvoorkeuren te begrijpen en genereer NIEUWE gerechten in diezelfde sfeer.
+- NOOIT een gerecht letterlijk herhalen uit de geschiedenis.
+
+ZERO-WASTE INSTRUCTIE:
+- Zero-Waste Level: ${prefs.zeroWasteLevel ?? 50}% (0 = maximale variatie, 100 = maximale efficiency/hergebruik ingrediënten).
+- Bij een hoog level: Gebruik grote ingrediënten (bloemkool, zak spinazie, hele kip) in meerdere gerechten verspreid over de week om verspilling te voorkomen.
+- Schrijf een kort 'zero_waste_report' waarin je uitlegt hoe je deze week verspilling voorkomt.
+
+${MODE_RULES}
+
+VOORWAARDEN:
+- Dieet: ${joinOr(prefs.diet, 'Geen')}
+- Huishouden: ${prefs.adultsCount ?? 2} volw, ${prefs.childrenCount ?? 0} kind.
+- Budget: ${prefs.budget || 'Normaal'}.
+- Kooktijd: doordeweeks maximaal ${prefs.cookingTime || '30'} min, weekend ${prefs.weekendCookingTime || 'unlimited'}.
+- VARIATIE: Zorg dat elk gerecht UNIEK is in ingrediënten, tenzij het Zero-Waste level hoog is.
+
+Antwoord uitsluitend met JSON: {"zero_waste_report": "...", "days": [7 gerechten in deze vorm: ${MEAL_SHAPE}]}`;
+
+  const data = await aiJson(env, system, 'Genereer het weekmenu en het zero-waste rapport.', 0.9);
+  const days = list(data.days).slice(0, 7);
+  days.forEach((m: any, i: number) => { m.mode = dayModes[String(i)] || 'premium'; });
+  await saveRecipes(env, days);
+  return { days, zero_waste_report: data.zero_waste_report || '' };
 }
 
 async function replaceMeal(env: Env, b: any) {
-  const mode = b.mode || 'premium';
-  const prompt = `Create ONE replacement dinner for "${b.meal_title}". Write text in ${langName(b.language)} (ai_image_prompt in English).
-- Diet: ${JSON.stringify(b.diet || [])}
-- Budget: ${b.budget || 'Normaal'}
-- Mode: ${mode} ('culinary' = chef-level, 'premium' = easy comfort food)
-- Must be clearly different from: ${JSON.stringify([b.meal_title, ...lastN(b.exclude_titles, 60)])}
-- Style inspiration: ${JSON.stringify(b.favorite_titles || [])}
+  const prefs = b.prefs || {};
+  const dayIndex = Number(b.dayIndex) || 0;
+  const targetMode = (prefs.dayModes || {})[String(dayIndex)] || 'premium';
+  const maxTime = dayIndex >= 5 ? prefs.weekendCookingTime : prefs.cookingTime;
+  const currentTitle = b.currentMeal?.title || '';
 
-Return JSON exactly in this shape: ${MEAL_SCHEMA}`;
-  const meal = await aiJson(env, CHEF_SYSTEM, prompt, 1.0);
-  meal.mode = mode;
-  await saveRecipes(env, [meal], b.diet || []);
-  return { status: 'success', meal };
+  const system = `Je vervangt een specifiek gerecht in een weekmenu. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
+STRIKTE RICHTLIJNEN VOOR MODE "${targetMode}".
+${MODE_RULES}
+VARIATIE: Het nieuwe gerecht MOET wezenlijk anders zijn dan "${currentTitle}" en mag NIET voorkomen in de geschiedenis: ${joinOr(list(prefs.generationHistory).slice(-100), 'Geen')}.
+SMAAKVOORKEUR: De gebruiker vindt dit lekker: ${joinOr(b.favoriteTitles, 'Nog geen favorieten')}. Gebruik dit als inspiratie voor de stijl van het nieuwe gerecht.
+VOORKEUREN: Dieet: ${joinOr(prefs.diet, 'Geen')}. Tijd: Maximaal ${maxTime || '30'} min. Budget: ${prefs.budget || 'Normaal'}.
+Antwoord uitsluitend met JSON in deze vorm: ${MEAL_SHAPE}`;
+
+  const meal = await aiJson(env, system, `Vervang "${currentTitle}" door een nieuw gerecht in de modus ${targetMode}.`, 1.0);
+  meal.mode = targetMode;
+  await saveRecipes(env, [meal]);
+  return meal;
+}
+
+/** Volledig recept: één keer gemaakt per gerecht, daarna uit de bank. Altijd voor BASE_SERVINGS personen. */
+async function fullRecipe(env: Env, b: any) {
+  const meal = b.meal || {};
+  let recipe = await findRecipe(env, meal.id, meal.title);
+  if (recipe?.details) return { ...JSON.parse(recipe.details), base_servings: BASE_SERVINGS };
+
+  const system = `Schrijf in het ${langName(b.language)}. Hoeveelheden voor ${BASE_SERVINGS} personen.
+${TIMER_RULES}
+Antwoord uitsluitend met JSON in deze vorm: ${FULL_RECIPE_SHAPE}`;
+  const details = await aiJson(env, system, `Volledig recept voor: ${meal.title}. Modus: ${meal.mode || 'premium'}.`, 0.6);
+  const clean = {
+    ingredients: list(details.ingredients),
+    steps: list(details.steps).map((s: any, i: number) => ({ ...s, step_index: s.step_index ?? i + 1 })),
+    supplies: list(details.supplies),
+    nutrition: details.nutrition || { calories: meal.calories_per_portion || 0 },
+    ...(details.plating_tips ? { plating_tips: details.plating_tips } : {}),
+    ...(details.wine_pairing ? { wine_pairing: details.wine_pairing } : {}),
+  };
+
+  if (!recipe && meal.title) {
+    await saveRecipes(env, [{ ...meal }]);
+    recipe = await findRecipe(env, undefined, meal.title);
+  }
+  if (recipe) {
+    await env.DB.prepare('UPDATE recipes SET details = ? WHERE id = ?').bind(JSON.stringify(clean), recipe.id).run();
+  }
+  return { ...clean, base_servings: BASE_SERVINGS };
 }
 
 async function shoppingList(env: Env, b: any) {
-  const meals = Array.isArray(b.meals) ? b.meals : [];
-  const list = meals.map((m: any) => `- ${m.title}: ${JSON.stringify(m.ingredients || [])}`).join('\n');
-  const prompt = `Combine these recipes into one shopping list in ${langName(b.language)}.
-Merge duplicate ingredients, add up amounts, round to practical shop quantities,
-and group by supermarket category (e.g. Groente & fruit, Vlees & vis, Zuivel, Voorraad).
-Recipes:
-${list}
-
-Return JSON: {"categories": [{"name": "...", "items": [{"name": "...", "amount": 0, "unit": "..."}]}]}`;
-  const data = await aiJson(env, CHEF_SYSTEM, prompt, 0.2);
-  const items: any[] = [];
-  for (const cat of data.categories || []) {
-    for (const it of cat.items || []) {
-      items.push({
-        id: `item_${items.length}`, name: it.name || '', amount: it.amount ?? '',
-        unit: it.unit || '', category: cat.name || '', checked: false,
-      });
+  const servings = Number(b.servings) || 2;
+  const lines: string[] = [];
+  for (const m of list(b.meals).slice(0, 14)) {
+    const recipe = await findRecipe(env, m.id, m.title);
+    const details = recipe?.details ? JSON.parse(recipe.details) : null;
+    if (details?.ingredients?.length) {
+      const factor = servings / BASE_SERVINGS;
+      const ing = details.ingredients.map((i: any) =>
+        `${Math.round((Number(i.amount) || 0) * factor * 10) / 10} ${i.unit} ${i.name}`).join('; ');
+      lines.push(`- ${m.title}: ${ing}`);
+    } else {
+      lines.push(`- ${m.title} (schat zelf de ingrediënten in)`);
     }
   }
-  return { status: 'success', items };
+  const system = `Je maakt een boodschappenlijst in het ${langName(b.language)} voor ${servings} personen.
+Voeg dubbele ingrediënten samen, tel hoeveelheden op en rond af naar praktische winkelhoeveelheden.
+Gebruik supermarktcategorieën (bijv. Groente & fruit, Vlees & vis, Zuivel, Voorraad).
+Antwoord uitsluitend met een JSON-array: [{"name": "...", "amount": 0, "unit": "...", "category": "..."}]`;
+  const data = await aiJson(env, system, `Shopping list for:\n${lines.join('\n')}`, 0.2);
+  const items = Array.isArray(data) ? data : list(data.items);
+  return items.map((it: any, i: number) => ({
+    name: it.name || '', amount: Number(it.amount) || 0, unit: it.unit || '', category: it.category || '',
+    id: `it-${i}`, checked: false,
+  }));
 }
 
 async function analyzeFridge(env: Env, b: any) {
-  if (!b.image_data) throw new ApiError(400, 'Geen foto ontvangen');
-  const prompt = `Look at this photo of a fridge or ingredients. List the ingredients you can clearly see,
-then suggest 3 dinners that mainly use them. Write text in ${langName(b.language)} (ai_image_prompt in English).
-Diet: ${JSON.stringify(b.diet || [])}.
-
-Return JSON: {"recognizedItems": ["..."], "suggestions": [3 objects in this shape: ${MEAL_SCHEMA}]}`;
-  const data = await aiJson(env, CHEF_SYSTEM, prompt, 0.6, b.image_data);
-  const suggestions = (data.suggestions || []).slice(0, 3);
-  suggestions.forEach((s: any) => { s.mode = 'magic'; });
-  await saveRecipes(env, suggestions, b.diet || []);
-  return { recognizedItems: data.recognizedItems || [], suggestions };
+  if (!b.image) throw new ApiError(400, 'Geen foto ontvangen');
+  const prefs = b.prefs || {};
+  const system = `Je bekijkt een foto van een koelkast of ingrediënten. Benoem wat je duidelijk ziet en stel 3 gerechten voor
+die vooral die ingrediënten gebruiken. Schrijf in het ${langName(prefs.language)} (ai_image_prompt in het Engels).
+Dieet: ${joinOr(prefs.diet, 'Geen')}.
+Antwoord uitsluitend met JSON: {"recognizedItems": ["..."], "suggestions": [3 gerechten in deze vorm: ${MEAL_SHAPE}]}`;
+  const data = await aiJson(env, system, 'Suggest 3 meals.', 0.6, b.image);
+  const suggestions = list(data.suggestions).slice(0, 3);
+  suggestions.forEach((m: any) => { m.mode = 'magic'; });
+  await saveRecipes(env, suggestions);
+  return { recognizedItems: list(data.recognizedItems), suggestions };
 }
 
 async function chat(env: Env, b: any) {
-  const history = lastN(b.messages, 12)
-    .map((m: any) => `${m.sender === 'assistant' ? 'Chef' : 'User'}: ${m.text || ''}`).join('\n');
-  const system =
-    'You are the Qook sous-chef inside a meal-planning app. Be friendly, professional, short and practical. ' +
-    `Answer in ${langName(b.language)}. User status: ${b.user_status}. Current screen: ${b.current_view}. ` +
-    `Current diet preferences: ${JSON.stringify(b.diet || [])}. Always answer with valid JSON only.`;
-  const prompt = `Conversation so far:
-${history}
-User: ${b.message || ''}
-
-If the user clearly asks to change their diet preferences, put the complete new list in "diet"; otherwise "diet" is null.
-Return JSON: {"reply": "your answer", "diet": null}`;
-  const data = await aiJson(env, system, prompt, 0.7);
+  const history = list(b.messages).slice(-12)
+    .map((m: any) => `${m.sender === 'assistant' ? 'Chef' : 'Gebruiker'}: ${m.text || ''}`).join('\n');
+  const system = `Je bent de culinaire motor achter de Qook-app.
+Je plant weekmenu's en fungeert als een intelligente Sous-chef.
+Je bent professioneel, kort en bondig. Antwoord in het ${langName(b.language)}.
+[USER_STATUS]: ${b.userStatus}
+[CURRENT_SCREEN]: ${b.currentView}
+[HUIDIG DIEET]: ${joinOr(b.diet, 'Geen')}
+Als de gebruiker duidelijk zijn dieet wil aanpassen, zet dan de volledige nieuwe lijst in "diet"; anders is "diet" null.
+Antwoord uitsluitend met JSON: {"reply": "...", "diet": null}`;
+  const data = await aiJson(env, system, `${history}\nGebruiker: ${b.message || ''}`, 0.7);
   return { reply: data.reply || '', diet: Array.isArray(data.diet) ? data.diet : null };
-}
-
-async function recipeDetails(env: Env, b: any) {
-  await ensureSchema(env);
-  const row = b.meal_id ? await env.DB.prepare('SELECT * FROM recipes WHERE id = ?').bind(String(b.meal_id)).first() : null;
-  return { status: 'success', details: row ? rowToMeal(row) : {} };
 }
 
 async function serveImage(env: Env, name: string) {
   const obj = await env.PHOTOS.get(`meals/${name}`);
   if (!obj) return new Response('Niet gevonden', { status: 404 });
   return new Response(obj.body, {
-    headers: {
-      'content-type': 'image/jpeg',
-      'cache-control': 'public, max-age=31536000, immutable',
-    },
+    headers: { 'content-type': 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable' },
   });
 }
 
@@ -349,20 +394,18 @@ async function serveImage(env: Env, name: string) {
 // Router
 // ---------------------------------------------------------------------------
 const POST_ROUTES: Record<string, (env: Env, body: any) => Promise<any>> = {
-  '/api/generate-weekly-plan': weeklyPlan,
+  '/api/weekly-plan': weeklyPlan,
   '/api/replace-meal': replaceMeal,
-  '/api/generate-shopping-list': shoppingList,
-  '/api/analyze-fridge': analyzeFridge,
+  '/api/full-recipe': fullRecipe,
+  '/api/shopping-list': shoppingList,
+  '/api/fridge-scan': analyzeFridge,
   '/api/chat': chat,
-  '/api/get-recipe-details': recipeDetails,
-  '/api/generate-image': async (env, b) => ({ status: 'success', url: await getOrCreateImage(env, String(b.recipe_id || '')) }),
+  '/api/meal-image': getOrCreateImage,
 };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    const path = url.pathname;
-
+    const path = new URL(request.url).pathname;
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
 
     try {
@@ -385,8 +428,8 @@ export default {
       }
       return json({ detail: 'Niet gevonden' }, 404);
     } catch (e: any) {
-      console.error(path, e?.stack || e);
       const status = e instanceof ApiError ? e.status : 500;
+      if (status >= 500 || status === 429) console.error(path, e?.stack || e);
       return json({ detail: e instanceof ApiError ? e.message : 'Er ging iets mis op de server' }, status);
     }
   },
