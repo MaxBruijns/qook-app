@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Lock, Crown, Settings, Heart, Check, Star, RefreshCw, Camera, Sparkles, Wine, ShoppingBag, Calendar, Globe, Languages } from 'lucide-react';
+import { Lock, Crown, Settings, Heart, Check, Star, RefreshCw, Camera, Sparkles, Wine, ShoppingBag, Calendar, Globe, Languages, UtensilsCrossed } from 'lucide-react';
 import { useTranslation, translations } from '../utils/i18n';
 import { SubscriptionStatus } from '../types';
 
@@ -21,6 +21,13 @@ export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { 
     </button>
   );
 };
+
+/** Neutrale plek zolang er nog geen eigen foto van het gerecht is (nooit een foto van iets anders). */
+export const MealPhotoPlaceholder: React.FC<{ dark?: boolean }> = ({ dark }) => (
+  <div className={`w-full h-full flex items-center justify-center ${dark ? 'bg-gradient-to-br from-kooq-dark to-[#3a454b]' : 'bg-gradient-to-br from-kooq-sage/25 via-kooq-white to-kooq-sand/30'}`}>
+    <UtensilsCrossed size={44} className={dark ? 'text-white/25' : 'text-kooq-sage/60'} />
+  </div>
+);
 
 export const Card: React.FC<{ children: React.ReactNode, className?: string, onClick?: () => void }> = ({ children, className = '', onClick }) => (
   <div onClick={onClick} className={`bg-white rounded-2xl shadow-sm border border-kooq-slate/5 overflow-hidden ${className} ${onClick ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`}>
