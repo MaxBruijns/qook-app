@@ -43,13 +43,13 @@ export const billingReady = (env: BillingEnv) => !!(env.STRIPE_SECRET_KEY && env
 const availablePlans = (env: BillingEnv) => (Object.keys(PLAN_ENV) as Plan[]).filter(p => !!env[PLAN_ENV[p]]);
 
 /** Welk abonnement hoort bij deze Stripe-prijs? */
-function tierForPrice(env: BillingEnv, priceId: string): Tier | null {
+export function tierForPrice(env: BillingEnv, priceId: string): Tier | null {
   for (const p of Object.keys(PLAN_ENV) as Plan[]) if (env[PLAN_ENV[p]] === priceId) return planTier(p);
   return null;
 }
 
 let ready: Promise<void> | null = null;
-function ensureColumns(db: any) {
+export function ensureColumns(db: any) {
   ready ||= (async () => {
     const { results } = await db.prepare('PRAGMA table_info(users)').all();
     const have = new Set((results || []).map((r: any) => r.name));
@@ -73,7 +73,7 @@ function form(data: Record<string, any>, prefix = '', out = new URLSearchParams(
   return out;
 }
 
-async function stripe(env: BillingEnv, path: string, data?: Record<string, any>) {
+export async function stripe(env: BillingEnv, path: string, data?: Record<string, any>) {
   const res = await fetch(`https://api.stripe.com/v1/${path}`, {
     method: data ? 'POST' : 'GET',
     headers: { authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, 'content-type': 'application/x-www-form-urlencoded',
@@ -201,4 +201,107 @@ export async function handleBilling(req: Request, env: BillingEnv, path: string,
     return json({ detail: 'Betalen lukte even niet. Probeer het zo opnieuw.' }, 502);
   }
   return json({ detail: 'Niet gevonden' }, 404);
+}
+
+// ---------------------------------------------------------------------------
+// Omzetoverzicht en dagelijkse controle (voor het beheerscherm)
+// ---------------------------------------------------------------------------
+const PLAN_LABEL: Record<Plan, string> = { basic_year: 'Basic (jaar)', premium_month: 'Premium (maand)', premium_year: 'Premium (jaar)',
+  culinary_month: 'Culinair (maand)', culinary_year: 'Culinair (jaar)' };
+export function planForPrice(env: BillingEnv, priceId: string): Plan | null {
+  for (const p of Object.keys(PLAN_ENV) as Plan[]) if (env[PLAN_ENV[p]] === priceId) return p;
+  return null;
+}
+
+/** Alle abonnementen uit Stripe (hoogstens 1000). */
+export async function listSubscriptions(env: BillingEnv) {
+  const all: any[] = [];
+  let after = '';
+  for (let page = 0; page < 10; page++) {
+    const r = await stripe(env, `subscriptions?status=all&limit=100${after ? `&starting_after=${after}` : ''}`);
+    all.push(...(r.data || []));
+    if (!r.has_more || !r.data?.length) break;
+    after = r.data[r.data.length - 1].id;
+  }
+  return all;
+}
+
+const ACTIVE = new Set(['active', 'trialing', 'past_due']);
+
+export async function revenueOverview(env: BillingEnv, now = Date.now()) {
+  if (!billingReady(env)) return { enabled: false };
+  const subs = await listSubscriptions(env);
+  const d = new Date(now);
+  const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000;
+  const in30 = now / 1000 + 30 * 86400;
+  const perPlan: Record<string, number> = {};
+  let mrr = 0, cancelling = 0, newThisMonth = 0, canceledThisMonth = 0, renewCount = 0, renewAmount = 0;
+  const pastDue: any[] = [];
+  for (const sub of subs) {
+    const price = sub.items?.data?.[0]?.price || {};
+    const plan = planForPrice(env, price.id);
+    const amount = Number(price.unit_amount) || 0;
+    if (sub.created >= monthStart && sub.status !== 'incomplete' && sub.status !== 'incomplete_expired') newThisMonth++;
+    if (sub.canceled_at && sub.canceled_at >= monthStart) canceledThisMonth++;
+    if (!ACTIVE.has(sub.status)) continue;
+    const label = plan ? PLAN_LABEL[plan] : (price.nickname || 'Onbekende prijs');
+    perPlan[label] = (perPlan[label] || 0) + 1;
+    mrr += price.recurring?.interval === 'year' ? amount / 12 : amount;
+    if (sub.cancel_at_period_end) cancelling++;
+    else if (sub.current_period_end && sub.current_period_end <= in30) { renewCount++; renewAmount += amount; }
+    if (sub.status === 'past_due') pastDue.push({ customer: sub.customer, since: sub.current_period_start });
+  }
+  // Betaalde facturen per maand (laatste 6 maanden).
+  const from = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 5, 1) / 1000;
+  const months: Record<string, { amount: number; count: number }> = {};
+  for (let i = 5; i >= 0; i--) {
+    const m = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1)).toISOString().slice(0, 7);
+    months[m] = { amount: 0, count: 0 };
+  }
+  let after = '';
+  for (let page = 0; page < 10; page++) {
+    const r = await stripe(env, `invoices?status=paid&limit=100&created[gte]=${from}${after ? `&starting_after=${after}` : ''}`);
+    for (const inv of r.data || []) {
+      const m = new Date(inv.created * 1000).toISOString().slice(0, 7);
+      if (months[m] && inv.amount_paid > 0) { months[m].amount += inv.amount_paid; months[m].count++; }
+    }
+    if (!r.has_more || !r.data?.length) break;
+    after = r.data[r.data.length - 1].id;
+  }
+  const active = Object.values(perPlan).reduce((a, b) => a + b, 0);
+  return {
+    enabled: true, currency: 'eur', active, per_plan: perPlan, mrr_cents: Math.round(mrr), cancelling,
+    new_this_month: newThisMonth, canceled_this_month: canceledThisMonth,
+    renewals_30d: { count: renewCount, amount_cents: renewAmount },
+    past_due: pastDue, months,
+  };
+}
+
+/** Stripe en de Qook-database gelijk houden (dagelijks): verschillen rechtzetten en melden. */
+export async function reconcile(env: BillingEnv) {
+  if (!billingReady(env)) return null;
+  await ensureColumns(env.DB);
+  const subs = await listSubscriptions(env);
+  const byCustomer = new Map<string, { tier: Tier; id: string }>();
+  for (const sub of subs) {
+    if (!ACTIVE.has(sub.status)) continue;
+    const tier = tierForPrice(env, sub.items?.data?.[0]?.price?.id);
+    if (tier) byCustomer.set(String(sub.customer), { tier, id: sub.id });
+  }
+  const { results } = await env.DB.prepare(`SELECT id, email, subscription, stripe_customer_id FROM users WHERE stripe_customer_id IS NOT NULL`).all();
+  const fixed: any[] = [];
+  const known = new Set<string>();
+  for (const u of results || []) {
+    known.add(u.stripe_customer_id);
+    const want = byCustomer.get(u.stripe_customer_id);
+    const tier = want?.tier || 'free';
+    const current = u.subscription === 'trial' ? 'free' : u.subscription;
+    if (current === tier) continue;
+    // Zonder actief Stripe-abonnement: alleen terugzetten als het account een betaald abonnement had.
+    if (!want && !['basic', 'premium', 'culinary'].includes(u.subscription)) continue;
+    await env.DB.prepare('UPDATE users SET subscription = ?, stripe_subscription_id = ? WHERE id = ?').bind(tier, want?.id || null, u.id).run();
+    fixed.push({ email: u.email, from: u.subscription, to: tier });
+  }
+  const unknown = [...byCustomer.keys()].filter(c => !known.has(c)).length;
+  return { at: new Date().toISOString(), checked: (results || []).length, fixed, unknown_customers: unknown };
 }

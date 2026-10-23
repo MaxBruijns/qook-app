@@ -26,7 +26,7 @@
 import { handleAuth, currentUser, tierOf } from './auth';
 import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
 import { recordMilestone, countReused, runTrialMails, unsubscribe, cleanupInactiveAccounts, Milestone } from './engagement';
-import { handleAdmin, reportRecipe, countVisit } from './admin';
+import { handleAdmin, reportRecipe, countVisit, dailyAdminTasks } from './admin';
 import { handleBilling } from './billing';
 import { handleExternal } from './external';
 
@@ -1748,7 +1748,8 @@ export default {
       .finally(() => cleanupCounters(env.DB).catch(() => {}))
       .finally(() => runTrialMails(env).then(r => { if (r.sent) console.log('Proef-e-mails:', JSON.stringify(r)); })
         .catch(e => console.warn('Proef-e-mails mislukt', errMsg(e))))
-      .finally(() => cleanupInactiveAccounts(env).catch(e => console.warn('Opruimen accounts mislukt', errMsg(e))));
+      .finally(() => cleanupInactiveAccounts(env).catch(e => console.warn('Opruimen accounts mislukt', errMsg(e))))
+      .finally(() => dailyAdminTasks(env as any).catch(e => console.warn('Stripe-controle mislukt', errMsg(e))));
     if (ctx?.waitUntil) ctx.waitUntil(run); else await run;
   },
 };
