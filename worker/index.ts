@@ -388,6 +388,7 @@ async function migrate(env: Env) {
     env.DB.prepare('CREATE INDEX IF NOT EXISTS recipes_title ON recipes(title)'),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS recipes_mode ON recipes(mode)'),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS recipes_seed ON recipes(seed_cat)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS worker_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)'),
   ];
   if (missing.length) {
     // Eenmalig: bestaande gerechten doorzoekbaar maken.
@@ -496,15 +497,47 @@ async function toWebp(env: Env, bytes: Uint8Array): Promise<{ body: Uint8Array; 
   }
 }
 
+// Status van het foto's maken: lukt het even niet (bijv. dagbudget Workers AI op),
+// dan pauzeren we tot het budget weer vrij is in plaats van elke aanvraag te laten mislukken.
+async function readState(env: Env, key: string): Promise<any> {
+  const row: any = await env.DB.prepare('SELECT value FROM worker_state WHERE key = ?').bind(key).first().catch(() => null);
+  try { return row ? JSON.parse(row.value) : null; } catch { return null; }
+}
+async function writeState(env: Env, key: string, value: any) {
+  await env.DB.prepare('INSERT INTO worker_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .bind(key, JSON.stringify(value)).run().catch(() => {});
+}
+export function imagePauseFor(message: string, now = Date.now()): number | null {
+  if (/4006|daily free allocation|neurons?\b|quota|exceeded/i.test(message)) {
+    const d = new Date(now); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) + 5 * 60_000;
+  }
+  if (/429|rate.?limit|too many|capacity|overloaded/i.test(message)) return now + 10 * 60_000;
+  return null;
+}
+async function imagesPaused(env: Env): Promise<number | null> {
+  const st = await readState(env, 'images');
+  return st?.paused_until && st.paused_until > Date.now() ? st.paused_until : null;
+}
+
 async function createImage(env: Env, recipe: any): Promise<string> {
   if (recipe.has_image) return imageUrl(recipe.id);
+  if (await imagesPaused(env)) throw new ApiError(503, 'Foto\'s maken lukt even niet; later opnieuw');
   const data = JSON.parse(recipe.data || '{}');
   // Zelfde opbouw als het origineel, aangevuld voor een realistische foodfoto.
   const prompt =
     `A professional food photography shot of ${recipe.title}. ${data.ai_image_prompt || ''}. ` +
     '4k, cinematic lighting. Plated dish, appetizing, realistic. No text, no watermark, no people, no hands.';
-  const out: any = await env.AI.run(IMAGE_MODEL, { prompt: prompt.slice(0, 2000), steps: 6 });
-  if (!out?.image) throw new ApiError(502, 'Geen afbeelding ontvangen van Workers AI');
+  let out: any;
+  try {
+    out = await env.AI.run(IMAGE_MODEL, { prompt: prompt.slice(0, 2000), steps: 6 });
+    if (!out?.image) throw new Error('Geen afbeelding ontvangen van Workers AI');
+  } catch (e) {
+    const message = errMsg(e).slice(0, 300);
+    const paused_until = imagePauseFor(message);
+    console.error('Foto maken mislukt:', message);
+    await writeState(env, 'images', { last_error: message, at: new Date().toISOString(), paused_until });
+    throw new ApiError(503, 'Foto\'s maken lukt even niet; later opnieuw');
+  }
   const { body, type } = await toWebp(env, base64ToBytes(out.image));
   await env.PHOTOS.put(`meals/${recipe.id}.jpg`, body, { httpMetadata: { contentType: type } });
   await env.DB.prepare('UPDATE recipes SET has_image = 1 WHERE id = ?').bind(recipe.id).run();
@@ -1181,7 +1214,10 @@ async function replaceFromBank(env: Env, prefs: any, plan: DayPlan, others: any[
   const rows = scoreCandidates(await bankCandidates(env, prefs, [plan.bankMode], 80), prefs, v);
   const fits = rows.filter(c => fitsDay(c, plan) && !conflictReason(c, others, v) && capsOk(c, others, prefs) && !tooSimilar(c, current));
   if (!fits.length) return null;
-  const pick = fits[Math.floor(Math.random() * Math.min(3, fits.length))];
+  // Gerechten die al een foto hebben eerst (de volgorde verder gelijk), zodat een
+  // vervangen gerecht direct een echte foto toont.
+  const ordered = [...fits.filter(c => c.has_image), ...fits.filter(c => !c.has_image)];
+  const pick = ordered[Math.floor(Math.random() * Math.min(3, ordered.length))];
   const meal = (await loadMeals(env, [pick.id])).get(pick.id);
   return meal ? { ...meal, mode: plan.mode } : null;
 }
@@ -1581,7 +1617,7 @@ async function seedRound(env: Env, opts: { details?: number; images?: number } =
   }
 
   // 3. Foto's (Workers AI heeft een eigen dagbudget; daarom weinig per ronde).
-  if (nImages > 0) {
+  if (nImages > 0 && !(await imagesPaused(env))) {
     const { results } = await env.DB.prepare(
       `SELECT * FROM recipes WHERE has_image = 0 AND mode IN ('premium', 'culinary')
        ORDER BY uses DESC, created_at LIMIT ?`).bind(nImages).all();
@@ -1590,6 +1626,13 @@ async function seedRound(env: Env, opts: { details?: number; images?: number } =
     for (const d of done) if (d.status === 'rejected') stats.errors.push(`foto: ${errMsg(d.reason)}`);
   }
   return stats;
+}
+
+async function photoStatus(env: Env) {
+  const st = await readState(env, 'images');
+  if (!st) return 'ok';
+  const paused = st.paused_until && st.paused_until > Date.now();
+  return { paused_until: paused ? new Date(st.paused_until).toISOString() : null, last_error: st.last_error, at: st.at };
 }
 
 async function bankStats(env: Env) {
@@ -1650,6 +1693,7 @@ export default {
           database: 'ok',
           images: env.IMAGES ? 'webp' : 'origineel',
           recipe_bank: await bankStats(env),
+          photo_status: await photoStatus(env),
         });
       }
       const admin = await handleAdmin(request, env, path);

@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { Meal, WeeklyPlan, DayMode, SubscriptionStatus, Usage } from '../types';
-import { Card, Badge, Button } from './Shared';
+import { Card, Badge, Button, MealPhotoPlaceholder } from './Shared';
 import { Clock, Flame, ShoppingBag, Sparkles, Check, Lock, Zap, Leaf, RefreshCw, Wine, Wand2, Crown, Star, Loader2, ChevronDown, ChevronUp, UtensilsCrossed, AlertCircle, Info, X } from 'lucide-react';
 import { useTranslation } from '../utils/i18n';
-import { generateMealImage } from '../services/geminiService';
+import { generateMealImage, realPhoto } from '../services/geminiService';
 
 export const MealCard: React.FC<{ 
     meal: Meal, 
@@ -21,18 +21,21 @@ export const MealCard: React.FC<{
     userStatus?: SubscriptionStatus,
     replacementsUsed?: number
 }> = ({ meal, dayIndex, onClick, selectedMealIds, onToggleShopItem, onReplace, t, isLocked, language, isReplacing, showDayLabel = true, userStatus, replacementsUsed = 0 }) => {
-    const [imgUrl, setImgUrl] = useState<string | null>(meal.generated_image_url || null);
-    const [loading, setLoading] = useState(!meal.generated_image_url);
+    const known = realPhoto(meal.generated_image_url) || null;
+    const [imgUrl, setImgUrl] = useState<string | null>(known);
+    const [loading, setLoading] = useState(!known);
 
     useEffect(() => {
-        if (imgUrl && meal.generated_image_url === imgUrl) return;
+        const current = realPhoto(meal.generated_image_url) || null;
+        if (current) { setImgUrl(current); setLoading(false); return; }
         let mounted = true;
         const init = async () => {
             setLoading(true);
             const url = await generateMealImage(meal.title, meal.ai_image_prompt);
             if (mounted) {
                 setImgUrl(url);
-                meal.generated_image_url = url;
+                // Alleen een echte foto onthouden; anders volgende keer opnieuw proberen.
+                meal.generated_image_url = url || undefined;
                 setLoading(false);
             }
         };
@@ -120,6 +123,8 @@ export const MealCard: React.FC<{
                     <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-kooq-white/50">
                         <Loader2 size={32} className="text-kooq-sage animate-spin" />
                     </div>
+) : !imgUrl ? (
+                    <MealPhotoPlaceholder dark={isCulinary} />
                 ) : ( 
                     <>
                         <img 
