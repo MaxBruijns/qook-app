@@ -1,0 +1,579 @@
+/**
+ * KOOQ — accounts: registreren, inloggen, uitloggen, gegevens synchroniseren,
+ * wachtwoord vergeten en account verwijderen.
+ *
+ *  - Wachtwoorden: PBKDF2-SHA256 met een eigen salt per gebruiker (nooit leesbaar opgeslagen).
+ *  - Sessies: willekeurige sleutel in een HttpOnly-cookie; in de database staat alleen de hash.
+ *  - Te veel foute pogingen: tijdelijk geblokkeerd (per e-mailadres en per IP-adres).
+ *  - Proefperiode: 14 dagen met Premium-functies (gerechten uit de receptenbank), daarna gratis.
+ *  - Gegevens: de app bewaart instellingen, weekmenu, favorieten, smaakprofiel en geschiedenis
+ *    per account, zodat ze op elk apparaat hetzelfde zijn.
+ *
+ * Instellingen (optioneel):
+ *  - PASSWORD_ITERATIONS: rekenwerk per wachtwoord (standaard 100000, het maximum van Cloudflare).
+ *  - RESEND_API_KEY + MAIL_FROM: e-mail versturen voor "wachtwoord vergeten" (vereist een eigen domein).
+ */
+import { mailReady, sendMail as sendMailRaw } from './mail.mjs';
+import { billingReady } from './billing.mjs';
+import { ensureEngagementSchema, loadStats, recordMilestone, isClientMilestone } from './engagement.mjs';
+const sendMail = (env, to, subject, text, opts = {}) => sendMailRaw(env, to, subject, text, opts).catch(() => { throw new AuthError(502, 'De e-mail kon niet verstuurd worden. Probeer het later opnieuw.'); });
+const COOKIE = 'kooq_session';
+const SESSION_DAYS = 60;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_ITERATIONS = 100000; // bovengrens van PBKDF2 in Cloudflare Workers
+const MIN_PASSWORD = 8;
+const MAX_PASSWORD = 200; // begrenst het rekenwerk per poging
+const RESET_MINUTES = 60;
+const TRIAL_DAYS = 14;
+/** Gegevens die de app per account bewaart (dezelfde namen als in de browser). */
+export const SYNC_KEYS = ['qook_prefs', 'qook_current_plan', 'qook_favorites', 'qook_favorite_meals', 'qook_usage',
+    'qook_taste', 'qook_meal_history', 'qook_pantry_have', 'qook_shop_order', 'qook_shopping_list'];
+const MAX_VALUE_BYTES = 300_000;
+class AuthError extends Error {
+    status;
+    constructor(status, message) {
+        super(message);
+        this.status = status;
+    }
+}
+const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', ...headers } });
+// ---------------------------------------------------------------------------
+// Database
+// ---------------------------------------------------------------------------
+let schemaReady = null;
+export function ensureAuthSchema(env) {
+    if (!schemaReady) {
+        schemaReady = env.DB.batch([
+            env.DB.prepare(`CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL DEFAULT '',
+        password TEXT NOT NULL,
+        subscription TEXT NOT NULL DEFAULT 'trial',
+        trial_started_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_login_at TEXT
+      )`),
+            env.DB.prepare(`CREATE TABLE IF NOT EXISTS sessions (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`),
+            env.DB.prepare('CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id)'),
+            env.DB.prepare(`CREATE TABLE IF NOT EXISTS user_data (
+        user_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, key)
+      )`),
+            env.DB.prepare(`CREATE TABLE IF NOT EXISTS auth_attempts (
+        key TEXT PRIMARY KEY,
+        count INTEGER NOT NULL,
+        reset_at INTEGER NOT NULL
+      )`),
+            env.DB.prepare(`CREATE TABLE IF NOT EXISTS password_resets (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      )`),
+        ]).then(() => undefined).catch((e) => { schemaReady = null; throw e; });
+    }
+    return schemaReady;
+}
+// ---------------------------------------------------------------------------
+// Cryptografie
+// ---------------------------------------------------------------------------
+const enc = new TextEncoder();
+const toB64 = (b) => {
+    const bytes = b instanceof Uint8Array ? b : new Uint8Array(b);
+    let s = '';
+    for (const x of bytes)
+        s += String.fromCharCode(x);
+    return btoa(s);
+};
+const fromB64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const b64url = (b) => toB64(b).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const randomToken = () => b64url(crypto.getRandomValues(new Uint8Array(32)));
+async function sha256Hex(s) {
+    const d = await crypto.subtle.digest('SHA-256', enc.encode(s));
+    return [...new Uint8Array(d)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+const iterations = (env) => {
+    const n = Number(env.PASSWORD_ITERATIONS);
+    return n >= 10000 ? Math.min(MAX_ITERATIONS, Math.floor(n)) : MAX_ITERATIONS;
+};
+async function pbkdf2(password, salt, iter) {
+    const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+    return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iter }, key, 256));
+}
+async function hashPassword(env, password) {
+    const iter = iterations(env);
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    return `pbkdf2$${iter}$${toB64(salt)}$${toB64(await pbkdf2(password, salt, iter))}`;
+}
+/** Vergelijkt zonder vroegtijdig te stoppen (geen informatie via de tijdsduur). */
+function sameBytes(a, b) {
+    if (a.length !== b.length)
+        return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++)
+        diff |= a[i] ^ b[i];
+    return diff === 0;
+}
+async function verifyPassword(stored, password) {
+    const [kind, iter, salt, hash] = String(stored).split('$');
+    if (kind !== 'pbkdf2' || !iter || !salt || !hash)
+        return false;
+    return sameBytes(await pbkdf2(password, fromB64(salt), Number(iter)), fromB64(hash));
+}
+// Nep-hash voor onbekende e-mailadressen, zodat de tijdsduur niet verraadt of een account bestaat.
+let dummyHash = null;
+// ---------------------------------------------------------------------------
+// Controles
+// ---------------------------------------------------------------------------
+const normEmail = (e) => String(e || '').trim().toLowerCase();
+const validEmail = (e) => e.length <= 200 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
+function checkPassword(p) {
+    const s = String(p || '');
+    if (s.length < MIN_PASSWORD)
+        throw new AuthError(400, `Kies een wachtwoord van minimaal ${MIN_PASSWORD} tekens.`);
+    if (s.length > MAX_PASSWORD)
+        throw new AuthError(400, 'Dit wachtwoord is te lang.');
+    return s;
+}
+const clientIp = (req) => req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || 'onbekend';
+/** Telt pogingen per sleutel; boven het maximum binnen het venster: geblokkeerd. */
+async function tooMany(env, key, max) {
+    const row = await env.DB.prepare('SELECT count, reset_at FROM auth_attempts WHERE key = ?').bind(key).first();
+    return !!row && row.reset_at > Date.now() && row.count >= max;
+}
+async function countAttempt(env, key, windowMin) {
+    const now = Date.now();
+    await env.DB.prepare(`INSERT INTO auth_attempts (key, count, reset_at) VALUES (?, 1, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      count = CASE WHEN reset_at <= ? THEN 1 ELSE count + 1 END,
+      reset_at = CASE WHEN reset_at <= ? THEN excluded.reset_at ELSE reset_at END`)
+        .bind(key, now + windowMin * 60000, now, now).run();
+}
+const clearAttempts = (env, key) => env.DB.prepare('DELETE FROM auth_attempts WHERE key = ?').bind(key).run();
+/** Aanvragen van een andere website weigeren (extra bescherming naast SameSite-cookies). */
+function sameOrigin(req) {
+    const origin = req.headers.get('origin');
+    if (!origin)
+        return true;
+    try {
+        return new URL(origin).host === new URL(req.url).host;
+    }
+    catch {
+        return false;
+    }
+}
+// ---------------------------------------------------------------------------
+// Sessies
+// ---------------------------------------------------------------------------
+function readCookie(req, name) {
+    const header = req.headers.get('cookie') || '';
+    for (const part of header.split(';')) {
+        const [k, ...v] = part.trim().split('=');
+        if (k === name)
+            return decodeURIComponent(v.join('='));
+    }
+    return '';
+}
+const sessionCookie = (token, maxAgeSec) => `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSec}`;
+async function createSession(env, userId) {
+    const token = randomToken();
+    await env.DB.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+        .bind(await sha256Hex(token), userId, Date.now() + SESSION_DAYS * DAY_MS).run();
+    return sessionCookie(token, SESSION_DAYS * 24 * 3600);
+}
+/** Ingelogde gebruiker bij deze aanvraag (of null). Verlengt de sessie als die over de helft is. */
+export async function currentUser(req, env) {
+    const token = readCookie(req, COOKIE);
+    if (!token || token.length > 100)
+        return null;
+    await ensureAuthSchema(env);
+    const hash = await sha256Hex(token);
+    const row = await env.DB.prepare(`SELECT s.expires_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ?`).bind(hash).first();
+    if (!row)
+        return null;
+    if (row.expires_at < Date.now()) {
+        await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(hash).run();
+        return null;
+    }
+    let refresh;
+    if (row.expires_at - Date.now() < (SESSION_DAYS / 2) * DAY_MS) {
+        await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE token_hash = ?').bind(Date.now() + SESSION_DAYS * DAY_MS, hash).run();
+        // Laatst gezien (ongeveer maandelijks): voor het opruimen van accounts die lang niet gebruikt zijn.
+        await env.DB.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').bind(row.id).run();
+        refresh = sessionCookie(token, SESSION_DAYS * 24 * 3600);
+    }
+    return { user: row, refresh };
+}
+/**
+ * Rechten van een gebruiker op dit moment. Een nieuw account krijgt 14 dagen proef met
+ * Premium-functies (gerechten uit de receptenbank); daarna zonder betaling terug naar gratis.
+ */
+export function tierOf(u) {
+    if (!u)
+        return 'visitor';
+    if (u.subscription === 'trial') {
+        const ends = new Date(u.trial_started_at || 0).getTime() + TRIAL_DAYS * DAY_MS;
+        return Date.now() <= ends ? 'trial' : 'free';
+    }
+    return ['free', 'basic', 'premium', 'culinary'].includes(u.subscription) ? u.subscription : 'free';
+}
+/** Voor de app: een proefperiode is "premium" met een startdatum (zo toont de app de resterende dagen). */
+const publicUser = (u) => {
+    const tier = tierOf(u);
+    return {
+        name: u.name, email: u.email, marketing: !!u.marketing_opt_in, verified: !!u.email_verified, billing: !!u.stripe_customer_id,
+        subscription: tier === 'trial' ? 'premium' : tier,
+        trial_started_at: tier === 'trial' ? u.trial_started_at : null,
+    };
+};
+async function loadData(env, userId) {
+    const { results } = await env.DB.prepare('SELECT key, value, updated_at FROM user_data WHERE user_id = ?').bind(userId).all();
+    const data = {};
+    for (const r of results || [])
+        data[r.key] = { value: r.value, updated_at: Number(r.updated_at) };
+    return data;
+}
+/** Bewaart gegevens uit de app; alleen bekende sleutels en begrensde grootte. */
+async function saveData(env, userId, items) {
+    if (!items || typeof items !== 'object')
+        throw new AuthError(400, 'Geen gegevens ontvangen');
+    const now = Date.now();
+    const stmts = [];
+    for (const [key, value] of Object.entries(items)) {
+        if (!SYNC_KEYS.includes(key))
+            continue;
+        if (value === null) {
+            stmts.push(env.DB.prepare('DELETE FROM user_data WHERE user_id = ? AND key = ?').bind(userId, key));
+            continue;
+        }
+        const v = String(value);
+        if (enc.encode(v).length > MAX_VALUE_BYTES)
+            throw new AuthError(413, `Te veel gegevens voor ${key}`);
+        stmts.push(env.DB.prepare(`INSERT INTO user_data (user_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).bind(userId, key, v, now));
+    }
+    if (stmts.length)
+        await env.DB.batch(stmts);
+    return now;
+}
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+async function register(req, env, b) {
+    const ip = clientIp(req);
+    if (await tooMany(env, `reg:${ip}`, 10))
+        throw new AuthError(429, 'Te veel nieuwe accounts vanaf dit adres. Probeer het later opnieuw.');
+    const email = normEmail(b.email);
+    if (!validEmail(email))
+        throw new AuthError(400, 'Vul een geldig e-mailadres in.');
+    const name = String(b.name || '').trim().slice(0, 80);
+    if (!name)
+        throw new AuthError(400, 'Vul je naam in.');
+    const password = checkPassword(b.password);
+    const exists = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+    if (exists)
+        throw new AuthError(409, 'Er bestaat al een account met dit e-mailadres. Log in of kies "Wachtwoord vergeten".');
+    const id = crypto.randomUUID();
+    const trial = new Date().toISOString();
+    try {
+        await env.DB.prepare(`INSERT INTO users (id, email, name, password, subscription, trial_started_at, last_login_at)
+      VALUES (?, ?, ?, ?, 'trial', ?, CURRENT_TIMESTAMP)`).bind(id, email, name, await hashPassword(env, password), trial).run();
+    }
+    catch (e) {
+        if (/unique/i.test(String(e?.message)))
+            throw new AuthError(409, 'Er bestaat al een account met dit e-mailadres.');
+        throw e;
+    }
+    await countAttempt(env, `reg:${ip}`, 60);
+    // Wat de bezoeker al in de app had (instellingen, weekmenu, ...) gaat mee naar het account.
+    if (b.data && typeof b.data === 'object')
+        await saveData(env, id, b.data).catch(e => console.warn('Gegevens meenemen mislukt', e?.message));
+    // E-mailadres bevestigen (als e-mail is ingesteld). Mislukt het versturen, dan kan het later opnieuw.
+    if (mailReady(env))
+        await sendVerification(req, env, { id, email, name }).catch(e => console.warn('Bevestigingsmail mislukt', e?.message));
+    const marketing = b.marketing === true;
+    if (marketing)
+        await env.DB.prepare('UPDATE users SET marketing_opt_in = 1 WHERE id = ?').bind(id).run();
+    const user = { id, email, name, subscription: 'trial', trial_started_at: trial, marketing_opt_in: marketing ? 1 : 0 };
+    return json({ user: publicUser(user), data: await loadData(env, id), stats: await loadStats(env.DB, id) }, 201, { 'set-cookie': await createSession(env, id) });
+}
+async function login(req, env, b) {
+    const email = normEmail(b.email);
+    const password = String(b.password || '').slice(0, MAX_PASSWORD);
+    const ip = clientIp(req);
+    if (await tooMany(env, `login:${email}`, 8) || await tooMany(env, `ip:${ip}`, 30)) {
+        throw new AuthError(429, 'Te veel inlogpogingen. Wacht een kwartier en probeer het opnieuw.');
+    }
+    const user = email ? await env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first() : null;
+    let ok = false;
+    if (user)
+        ok = await verifyPassword(user.password, password);
+    else {
+        dummyHash ||= hashPassword(env, 'geen-account');
+        await verifyPassword(await dummyHash, password);
+    }
+    if (!user || !ok) {
+        await countAttempt(env, `login:${email}`, 15);
+        await countAttempt(env, `ip:${ip}`, 15);
+        throw new AuthError(401, 'E-mailadres of wachtwoord klopt niet.');
+    }
+    await clearAttempts(env, `login:${email}`);
+    // Sterkere instelling dan bij het aanmaken? Dan het wachtwoord meteen opnieuw versleutelen.
+    const storedIter = Number(String(user.password).split('$')[1]) || 0;
+    const updates = [env.DB.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').bind(user.id)];
+    if (storedIter < iterations(env)) {
+        updates.push(env.DB.prepare('UPDATE users SET password = ? WHERE id = ?').bind(await hashPassword(env, password), user.id));
+    }
+    await env.DB.batch(updates);
+    return json({ user: publicUser(user), data: await loadData(env, user.id), stats: await loadStats(env.DB, user.id) }, 200, { 'set-cookie': await createSession(env, user.id) });
+}
+async function logout(req, env) {
+    const token = readCookie(req, COOKIE);
+    if (token)
+        await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256Hex(token)).run();
+    return json({ ok: true }, 200, { 'set-cookie': sessionCookie('', 0) });
+}
+async function forgot(req, env, b) {
+    if (!mailReady(env)) {
+        throw new AuthError(501, 'Wachtwoord herstellen via e-mail is nog niet beschikbaar. Neem contact met ons op.');
+    }
+    const email = normEmail(b.email);
+    const ip = clientIp(req);
+    if (await tooMany(env, `forgot:${ip}`, 5) || await tooMany(env, `forgot:${email}`, 3)) {
+        throw new AuthError(429, 'Er is al een e-mail verstuurd. Kijk in je inbox (en spam) of probeer het later opnieuw.');
+    }
+    await countAttempt(env, `forgot:${ip}`, 60);
+    await countAttempt(env, `forgot:${email}`, 60);
+    const user = validEmail(email) ? await env.DB.prepare('SELECT id, name FROM users WHERE email = ?').bind(email).first() : null;
+    if (user) {
+        const token = randomToken();
+        await env.DB.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+            .bind(await sha256Hex(token), user.id, Date.now() + RESET_MINUTES * 60000).run();
+        const link = `${new URL(req.url).origin}/app/?reset=${token}`;
+        await sendMail(env, email, 'Nieuw wachtwoord voor Qook', `Hoi ${user.name || ''},\n\nJe hebt gevraagd om een nieuw wachtwoord voor Qook. Kies een nieuw wachtwoord via deze link ` +
+            `(${RESET_MINUTES} minuten geldig):\n\n${link}\n\nHeb je dit niet zelf gevraagd? Dan kun je deze e-mail negeren.\n\nGroet,\nQook`);
+    }
+    // Altijd hetzelfde antwoord, zodat niet te zien is of een e-mailadres een account heeft.
+    return json({ ok: true });
+}
+async function resetPassword(env, b) {
+    const password = checkPassword(b.password);
+    const hash = await sha256Hex(String(b.token || ''));
+    const row = await env.DB.prepare('SELECT user_id, expires_at FROM password_resets WHERE token_hash = ?').bind(hash).first();
+    if (!row || row.expires_at < Date.now())
+        throw new AuthError(400, 'Deze link is verlopen of al gebruikt. Vraag een nieuwe aan.');
+    await env.DB.batch([
+        env.DB.prepare('UPDATE users SET password = ? WHERE id = ?').bind(await hashPassword(env, password), row.user_id),
+        env.DB.prepare('DELETE FROM password_resets WHERE user_id = ?').bind(row.user_id),
+        env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.user_id), // overal uitloggen
+    ]);
+    const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(row.user_id).first();
+    return json({ user: publicUser(user), data: await loadData(env, row.user_id) }, 200, { 'set-cookie': await createSession(env, row.user_id) });
+}
+async function deleteAccount(env, user, b) {
+    if (!(await verifyPassword(user.password, String(b.password || '').slice(0, MAX_PASSWORD)))) {
+        throw new AuthError(401, 'Wachtwoord klopt niet.');
+    }
+    await env.DB.batch([
+        env.DB.prepare('DELETE FROM user_data WHERE user_id = ?').bind(user.id),
+        env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id),
+        env.DB.prepare('DELETE FROM password_resets WHERE user_id = ?').bind(user.id),
+        env.DB.prepare('DELETE FROM user_milestones WHERE user_id = ?').bind(user.id),
+        env.DB.prepare('DELETE FROM email_log WHERE user_id = ?').bind(user.id),
+        env.DB.prepare('DELETE FROM email_verifications WHERE user_id = ?').bind(user.id),
+        env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id),
+    ]);
+    return json({ ok: true }, 200, { 'set-cookie': sessionCookie('', 0) });
+}
+/** Mail met een link om het e-mailadres te bevestigen (geldig 7 dagen). */
+async function sendVerification(req, env, user) {
+    const token = randomToken();
+    await env.DB.prepare('INSERT INTO email_verifications (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+        .bind(await sha256Hex(token), user.id, Date.now() + 7 * DAY_MS).run();
+    const link = `${new URL(req.url).origin}/api/auth/verify?t=${token}`;
+    await sendMail(env, user.email, 'Bevestig je e-mailadres voor Qook', `Hoi ${user.name},\n\nWelkom bij Qook! Bevestig je e-mailadres via deze link:\n\n${link}\n\n` +
+        `Daarna sturen we je je boodschappenlijst en belangrijke berichten over je account.\n` +
+        `Heb je geen account gemaakt? Dan kun je deze e-mail negeren.\n\nGroet,\nQook`);
+}
+/** Klik op de link in de bevestigingsmail. */
+async function verifyEmail(env, token) {
+    const hash = await sha256Hex(token || '');
+    const row = await env.DB.prepare('SELECT user_id, expires_at FROM email_verifications WHERE token_hash = ?').bind(hash).first();
+    if (!row || row.expires_at < Date.now())
+        return new Response(null, { status: 302, headers: { location: '/app/?verified=0' } });
+    await env.DB.batch([
+        env.DB.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').bind(row.user_id),
+        env.DB.prepare('DELETE FROM email_verifications WHERE user_id = ?').bind(row.user_id),
+    ]);
+    return new Response(null, { status: 302, headers: { location: '/app/?verified=1' } });
+}
+/** Wachtwoord wijzigen (ingelogd). Andere apparaten worden uitgelogd. */
+async function changePassword(req, env, user, b) {
+    if (!(await verifyPassword(user.password, String(b.current || '').slice(0, MAX_PASSWORD)))) {
+        throw new AuthError(401, 'Je huidige wachtwoord klopt niet.');
+    }
+    const password = checkPassword(b.password);
+    const keep = await sha256Hex(readCookie(req, COOKIE));
+    await env.DB.batch([
+        env.DB.prepare('UPDATE users SET password = ? WHERE id = ?').bind(await hashPassword(env, password), user.id),
+        env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').bind(user.id, keep),
+    ]);
+    return json({ ok: true });
+}
+/** Alles wat Qook over deze gebruiker bewaart (inzagerecht AVG), als JSON-bestand. */
+async function exportData(env, user) {
+    const data = await loadData(env, user.id);
+    const parsed = {};
+    for (const [k, v] of Object.entries(data)) {
+        try {
+            parsed[k] = JSON.parse(v.value);
+        }
+        catch {
+            parsed[k] = v.value;
+        }
+    }
+    const { results: milestones } = await env.DB.prepare('SELECT key, count, value, first_at, last_at FROM user_milestones WHERE user_id = ?').bind(user.id).all();
+    const { results: mails } = await env.DB.prepare('SELECT kind, sent_at FROM email_log WHERE user_id = ?').bind(user.id).all();
+    const { results: sessions } = await env.DB.prepare('SELECT created_at, expires_at FROM sessions WHERE user_id = ?').bind(user.id).all();
+    const body = {
+        exported_at: new Date().toISOString(),
+        account: { name: user.name, email: user.email, subscription: tierOf(user), trial_started_at: user.trial_started_at,
+            created_at: user.created_at, last_login_at: user.last_login_at, marketing_opt_in: !!user.marketing_opt_in, email_verified: !!user.email_verified },
+        app_data: parsed,
+        milestones: milestones || [],
+        emails_sent: (mails || []).map((m) => ({ kind: m.kind, sent_at: new Date(m.sent_at).toISOString() })),
+        active_sessions: (sessions || []).map((s) => ({ created_at: s.created_at, expires_at: new Date(s.expires_at).toISOString() })),
+        note: 'Je wachtwoord bewaren we alleen versleuteld en staat daarom niet in dit bestand.',
+    };
+    return new Response(JSON.stringify(body, null, 2), { headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'content-disposition': `attachment; filename="qook-gegevens-${new Date().toISOString().slice(0, 10)}.json"`
+        } });
+}
+const esc = (s) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/** Boodschappenlijst naar het e-mailadres van het account (op verzoek van de gebruiker zelf). */
+async function emailList(env, user, b, headers) {
+    if (!mailReady(env))
+        throw new AuthError(501, 'Mailen is nog niet beschikbaar.');
+    if (!user.email_verified)
+        throw new AuthError(403, 'Bevestig eerst je e-mailadres (zie de mail die we je stuurden, of Instellingen).');
+    const key = `listmail:${user.id}`;
+    if (await tooMany(env, key, 10))
+        throw new AuthError(429, 'Je hebt vandaag al vaak een lijst gemaild. Probeer het morgen opnieuw.');
+    const sections = (Array.isArray(b.sections) ? b.sections : []).slice(0, 30).map((sec) => ({
+        title: String(sec?.title || '').slice(0, 80),
+        items: (Array.isArray(sec?.items) ? sec.items : []).slice(0, 150).map((i) => ({
+            name: String(i?.name || '').slice(0, 120), amount: String(i?.amount || '').slice(0, 40), checked: !!i?.checked
+        })),
+    })).filter((sec) => sec.items.length);
+    if (!sections.length)
+        throw new AuthError(400, 'De lijst is leeg.');
+    const text = sections.map((sec) => `${sec.title.toUpperCase()}\n` +
+        sec.items.map((i) => `${i.checked ? '[x]' : '[ ]'} ${i.name}${i.amount ? ` – ${i.amount}` : ''}`).join('\n')).join('\n\n');
+    const html = `<div style="font-family:Arial,sans-serif;color:#2A3338;max-width:560px">
+<h1 style="font-size:22px;margin:0 0 4px">Weekboodschappen</h1>
+<p style="color:#5D6E76;margin:0 0 20px">Je lijst van Qook, in de volgorde van de winkel.</p>
+${sections.map((sec) => `<h2 style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#5E8A69;margin:18px 0 6px">${esc(sec.title)}</h2>
+<table style="width:100%;border-collapse:collapse;font-size:15px">${sec.items.map((i) => `<tr style="border-bottom:1px solid #E4EAE5${i.checked ? ';color:#9AA5A9;text-decoration:line-through' : ''}"><td style="padding:6px 0">&#9744; ${esc(i.name)}</td><td style="padding:6px 0;text-align:right;color:#5D6E76;white-space:nowrap">${esc(i.amount)}</td></tr>`).join('')}</table>`).join('\n')}
+</div>`;
+    await sendMail(env, user.email, 'Je weekboodschappen van Qook', `Je weekboodschappen van Qook\n\n${text}\n`, { html });
+    await countAttempt(env, key, 24 * 60);
+    return json({ ok: true, to: user.email }, 200, headers);
+}
+/** Afhandeling van /api/auth/* en /api/account/*. Geeft null terug voor andere paden. */
+export async function handleAuth(req, env, path) {
+    if (!path.startsWith('/api/auth/') && !path.startsWith('/api/account/'))
+        return null;
+    try {
+        await ensureAuthSchema(env);
+        await ensureEngagementSchema(env.DB);
+        if (req.method !== 'GET' && !sameOrigin(req))
+            throw new AuthError(403, 'Niet toegestaan');
+        const body = req.method === 'GET' ? {} : await req.json().catch(() => ({}));
+        if (req.method === 'POST' && path === '/api/auth/register')
+            return await register(req, env, body);
+        if (req.method === 'POST' && path === '/api/auth/login')
+            return await login(req, env, body);
+        if (req.method === 'POST' && path === '/api/auth/logout')
+            return await logout(req, env);
+        if (req.method === 'POST' && path === '/api/auth/forgot')
+            return await forgot(req, env, body);
+        if (req.method === 'POST' && path === '/api/auth/reset')
+            return await resetPassword(env, body);
+        if (req.method === 'GET' && path === '/api/auth/verify')
+            return await verifyEmail(env, new URL(req.url).searchParams.get('t') || '');
+        if (req.method === 'GET' && path === '/api/auth/config')
+            return json({ password_reset: mailReady(env), email: mailReady(env) });
+        const session = await currentUser(req, env);
+        const headers = session?.refresh ? { 'set-cookie': session.refresh } : {};
+        if (req.method === 'GET' && path === '/api/auth/me') {
+            if (!session)
+                return json({ user: null });
+            return json({ user: publicUser(session.user), data: await loadData(env, session.user.id),
+                stats: await loadStats(env.DB, session.user.id) }, 200, headers);
+        }
+        if (!session)
+            throw new AuthError(401, 'Je bent niet (meer) ingelogd.');
+        if (req.method === 'PUT' && path === '/api/account/data') {
+            return json({ ok: true, updated_at: await saveData(env, session.user.id, body.items) }, 200, headers);
+        }
+        if (req.method === 'POST' && path === '/api/account/subscription') {
+            // Tijdelijk, tot de betaling (Stripe) er is: de gekozen abonnementsvorm onthouden.
+            const tier = String(body.tier || '');
+            if (!['free', 'basic', 'premium', 'culinary'].includes(tier))
+                throw new AuthError(400, 'Onbekend abonnement');
+            // Zodra Stripe aan staat, kan een betaald abonnement alleen nog via de betaalpagina.
+            if (billingReady(env) && tier !== 'free')
+                throw new AuthError(402, 'Kies je abonnement via de betaalpagina.');
+            await env.DB.prepare('UPDATE users SET subscription = ?, trial_started_at = NULL WHERE id = ?').bind(tier, session.user.id).run();
+            return json({ ok: true, subscription: tier }, 200, headers);
+        }
+        if (req.method === 'POST' && path === '/api/account/delete')
+            return await deleteAccount(env, session.user, body);
+        if (req.method === 'POST' && path === '/api/account/marketing') {
+            const optIn = body.opt_in === true;
+            await env.DB.prepare('UPDATE users SET marketing_opt_in = ? WHERE id = ?').bind(optIn ? 1 : 0, session.user.id).run();
+            return json({ ok: true, marketing: optIn }, 200, headers);
+        }
+        if (req.method === 'POST' && path === '/api/account/password')
+            return await changePassword(req, env, session.user, body);
+        if (req.method === 'GET' && path === '/api/account/export')
+            return await exportData(env, session.user);
+        if (req.method === 'POST' && path === '/api/account/verify-email') {
+            if (!mailReady(env))
+                throw new AuthError(501, 'E-mail is nog niet beschikbaar.');
+            if (session.user.email_verified)
+                return json({ ok: true, verified: true }, 200, headers);
+            if (await tooMany(env, `verify:${session.user.id}`, 3))
+                throw new AuthError(429, 'We hebben al een paar bevestigingsmails gestuurd. Kijk ook in je spam.');
+            await sendVerification(req, env, session.user);
+            await countAttempt(env, `verify:${session.user.id}`, 60);
+            return json({ ok: true }, 200, headers);
+        }
+        if (req.method === 'POST' && path === '/api/account/email-list')
+            return await emailList(env, session.user, body, headers);
+        if (req.method === 'POST' && path === '/api/account/milestone') {
+            // Alleen mijlpalen die de app zelf meldt (gekookt, duim omhoog); de rest telt de server zelf.
+            if (!isClientMilestone(body.key))
+                throw new AuthError(400, 'Onbekende mijlpaal');
+            await recordMilestone(env.DB, `u:${session.user.id}`, body.key);
+            return json({ ok: true }, 200, headers);
+        }
+        return json({ detail: 'Niet gevonden' }, 404);
+    }
+    catch (e) {
+        if (e instanceof AuthError)
+            return json({ detail: e.message }, e.status);
+        console.error(path, e?.stack || e);
+        return json({ detail: 'Er ging iets mis op de server' }, 500);
+    }
+}
