@@ -3,6 +3,7 @@ import React from 'react';
 import { Lock, Crown, Settings, Heart, Check, Star, RefreshCw, Camera, Sparkles, Wine, ShoppingBag, Calendar, Globe, Languages, UtensilsCrossed } from 'lucide-react';
 import { useTranslation, translations } from '../utils/i18n';
 import { SubscriptionStatus } from '../types';
+import { Notice, onNotice } from '../utils/notify';
 
 export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'outline' | 'ghost' }> = ({ 
   children, variant = 'primary', className = '', ...props 
@@ -68,7 +69,7 @@ export const PaywallModal: React.FC<{
                 </div>
                 <ul className="space-y-3 mb-8 flex-1">
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 52 weken gebalanceerd menu</li>
-                    <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 3x per week herziening</li>
+                    <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 3x per week een gerecht vervangen</li>
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 1x per week Koelkast-Magic</li>
                 </ul>
                 <Button onClick={() => onUpgrade('basic')} variant="outline" className="w-full">Start Basic</Button>
@@ -86,10 +87,10 @@ export const PaywallModal: React.FC<{
                     </div>
                 </div>
                 <ul className="space-y-3 mb-8 flex-1">
-                    <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Onbeperkte herzieningen</li>
+                    <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Onbeperkt gerechten vervangen</li>
                     <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Onbeperkte Koelkast-Magic</li>
-                    <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Zero-Waste Intelligentie</li>
-                    <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Maximale regie over je week & budget</li>
+                    <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Elke week 1x extra weekmenu</li>
+                    <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Menu afgestemd op jouw smaak + zero-waste-rapport</li>
                 </ul>
                 <Button onClick={() => onUpgrade('premium')} className="w-full bg-kooq-sage border-none shadow-kooq-sage/20">Start Premium</Button>
             </div>
@@ -107,7 +108,7 @@ export const PaywallModal: React.FC<{
                 <ul className="space-y-3 mb-8 flex-1">
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-clementine shrink-0"/> Onbeperkt gastronomische recepten</li>
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-clementine shrink-0"/> Wijn-Spijs suggesties</li>
-                    <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-clementine shrink-0"/> Gast-modus & Diner planning</li>
+                    <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-clementine shrink-0"/> Per dag kiezen: culinair of gewoon</li>
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-clementine shrink-0"/> Chef's Plating Tips</li>
                 </ul>
                 <Button onClick={() => onUpgrade('culinary')} className="w-full bg-kooq-clementine border-none shadow-kooq-clementine/20">Start Culinair</Button>
@@ -167,7 +168,7 @@ export const Header: React.FC<{
             <div className="flex items-center gap-1">
                 <div className="flex items-center gap-2 cursor-pointer" onClick={onMenuClick}>
                     <div className="w-8 h-8 bg-kooq-sage rounded-lg flex items-center justify-center text-white font-bold shadow-sm">Q</div>
-                    <span className="font-sans font-black text-xl text-kooq-dark tracking-tighter">KOOQ</span>
+                    <span className="font-sans font-black text-xl text-kooq-dark tracking-tighter">Qook</span>
                 </div>
             </div>
             <div className="flex items-center gap-1 md:gap-3">
@@ -187,4 +188,25 @@ export const Header: React.FC<{
             </div>
         </header>
     );
+};
+
+/** Meldingen onderaan het scherm; verdwijnen vanzelf na een paar seconden. */
+export const Notices: React.FC = () => {
+  const [items, setItems] = React.useState<Notice[]>([]);
+  React.useEffect(() => onNotice(n => {
+    setItems(list => [...list.slice(-2), n]);
+    setTimeout(() => setItems(list => list.filter(x => x.id !== n.id)), n.kind === 'error' ? 7000 : 4500);
+  }), []);
+  if (!items.length) return null;
+  return (
+    <div className="fixed inset-x-0 bottom-28 z-[120] flex flex-col items-center gap-2 px-4 pointer-events-none" role="status" aria-live="polite">
+      {items.map(n => (
+        <div key={n.id} onClick={() => setItems(list => list.filter(x => x.id !== n.id))}
+          className={`pointer-events-auto max-w-md w-full rounded-2xl px-5 py-4 text-sm font-medium shadow-2xl cursor-pointer animate-in slide-in-from-bottom-4 duration-300 ${
+            n.kind === 'error' ? 'bg-red-600 text-white' : n.kind === 'success' ? 'bg-kooq-sage text-white' : 'bg-kooq-dark text-white'}`}>
+          {n.text}
+        </div>
+      ))}
+    </div>
+  );
 };

@@ -11,6 +11,15 @@ export default defineConfig(() => {
         proxy: { '/api': 'http://localhost:8787' },
       },
       plugins: [react()],
+      // Twee pagina's: de landingspagina (/) en de app (/app/).
+      build: {
+        rollupOptions: {
+          input: {
+            main: path.resolve(__dirname, 'index.html'),
+            app: path.resolve(__dirname, 'app/index.html'),
+          },
+        },
+      },
       resolve: {
         alias: {
   '@': path.resolve(__dirname, './'),

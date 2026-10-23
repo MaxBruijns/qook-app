@@ -45,6 +45,7 @@ export const translations = {
     trial_active_desc: "Je 14-daagse proefperiode met alle Premium-functies is gestart: onbeperkt gerechten vervangen en elke week een extra weekmenu. Ontdek hoeveel je bespaart!",
     trial_days_left: "nog {n} dagen",
     prefs_next_week: "Je voorkeuren zijn opgeslagen. Ze gelden vanaf je volgende weekmenu.",
+    allergy_notice: "Qook houdt rekening met je dieet, maar kan allergenen niet garanderen. Heb je een allergie of intolerantie? Controleer altijd het etiket van elk product.",
     free_until: "Gratis tot en met",
     start_cooking_btn: "Start met koken",
     loading_plan: "De chef stelt je menu samen...",
@@ -246,6 +247,7 @@ export const translations = {
     trial_active_desc: "Your 14-day trial with all Premium features has started: unlimited swaps and an extra weekly menu every week. See how much you save!",
     trial_days_left: "{n} days left",
     prefs_next_week: "Your preferences are saved. They apply from your next weekly menu.",
+    allergy_notice: "Qook takes your diet into account but cannot guarantee allergen-free meals. Have an allergy or intolerance? Always check the label of every product.",
     free_until: "Free until",
     start_cooking_btn: "Start Cooking",
     loading_plan: "The chef is curating your menu...",
@@ -407,16 +409,20 @@ export const translations = {
 };
 
 export const useTranslation = (lang: string) => {
-  const t = (translations as any)[lang] || translations['nl-NL'];
+  // Alleen Nederlands en Engels zijn vertaald; andere talen krijgen Engels.
+  const t = (translations as any)[lang] || (!lang || lang.startsWith('nl') ? translations['nl-NL'] : translations['en-US']);
   return { t };
 };
 
 export const detectUserLocale = () => {
   const lang = navigator.language || 'nl-NL';
+  // Taal: Nederlands of Engels (de enige vertaalde talen). Regio: voor de ingrediënten in de supermarkt.
+  if (lang.startsWith('nl')) return { language: 'nl-NL', region: (lang.endsWith('BE') ? 'BE' : 'NL') as Region };
+  if (lang.startsWith('de')) return { language: 'en-US', region: 'DE' as Region };
+  if (lang.startsWith('fr')) return { language: 'en-US', region: 'FR' as Region };
+  if (lang.startsWith('es')) return { language: 'en-US', region: 'ES' as Region };
+  if (lang === 'en-GB') return { language: 'en-US', region: 'UK' as Region };
   if (lang.startsWith('en')) return { language: 'en-US', region: 'US' as Region };
-  if (lang.startsWith('de')) return { language: 'de-DE', region: 'DE' as Region };
-  if (lang.startsWith('fr')) return { language: 'fr-FR', region: 'FR' as Region };
-  if (lang.startsWith('es')) return { language: 'es-ES', region: 'ES' as Region };
   return { language: 'nl-NL', region: 'NL' as Region };
 };
 
