@@ -17,6 +17,11 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
 }
 
+// Bezoek tellen: geen cookie, geen IP-adres; één keer per sessie.
+try {
+  if (!sessionStorage.getItem('qook_v')) { sessionStorage.setItem('qook_v', '1'); navigator.sendBeacon?.('/api/v', JSON.stringify({ p: 'app' })); }
+} catch {}
+
 bootstrapAccount().finally(() => {
   root.render(
     <React.StrictMode>

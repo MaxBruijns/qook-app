@@ -25,7 +25,10 @@
 
 import { handleAuth, currentUser, tierOf } from './auth';
 import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
-import { recordMilestone, countReused, runTrialMails, unsubscribe, Milestone } from './engagement';
+import { recordMilestone, countReused, runTrialMails, unsubscribe, cleanupInactiveAccounts, Milestone } from './engagement';
+import { handleAdmin, reportRecipe, countVisit } from './admin';
+import { handleBilling } from './billing';
+import { handleExternal } from './external';
 
 interface Env {
   DB: any;            // D1-database (receptenbank)
@@ -44,6 +47,10 @@ interface Env {
   RESEND_API_KEY?: string;
   MAIL_FROM?: string;
   LIMITS?: string;     // 'off' = geen limieten en volledige AI (alleen voor testen)
+  // Stripe (zie worker/billing.ts)
+  STRIPE_SECRET_KEY?: string; STRIPE_WEBHOOK_SECRET?: string; STRIPE_PRICE_BASIC_YEAR?: string;
+  STRIPE_PRICE_PREMIUM_MONTH?: string; STRIPE_PRICE_PREMIUM_YEAR?: string;
+  STRIPE_PRICE_CULINARY_MONTH?: string; STRIPE_PRICE_CULINARY_YEAR?: string;
 }
 
 const FULL_ACCESS: Actor = { tier: 'premium', who: 'test' };
@@ -349,7 +356,7 @@ const MIN_RECIPE_VERSION = 3;
 
 const EXTRA_COLUMNS: [string, string][] = [
   ['mode', 'TEXT'], ['main', 'TEXT'], ['cuisine', 'TEXT'], ['diet_tags', 'TEXT'], ['kid', 'INTEGER NOT NULL DEFAULT 0'],
-  ['minutes', 'INTEGER'], ['details_v', 'INTEGER NOT NULL DEFAULT 0'], ['seed_cat', 'TEXT'], ['uses', 'INTEGER NOT NULL DEFAULT 0'],
+  ['minutes', 'INTEGER'], ['details_v', 'INTEGER NOT NULL DEFAULT 0'], ['seed_cat', 'TEXT'], ['uses', 'INTEGER NOT NULL DEFAULT 0'], ['hidden', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 let schemaReady: Promise<void> | null = null;
@@ -899,7 +906,7 @@ function shortIngredients(raw: any) {
 async function bankCandidates(env: Env, prefs: any, modes: string[], limit: number): Promise<Candidate[]> {
   await ensureSchema(env);
   const diet = userDiet(prefs);
-  const where = [`mode IN (${modes.map(() => '?').join(',')})`];
+  const where = [`mode IN (${modes.map(() => '?').join(',')})`, 'hidden = 0'];   // gemelde recepten niet
   const args: any[] = [...modes];
   for (const t of diet.tags) { where.push('diet_tags LIKE ?'); args.push(`%,${t},%`); }
   if (prefs.weekProfile === 'kid_friendly') where.push(`(kid = 1 OR mode = 'culinary')`);
@@ -1387,7 +1394,7 @@ function guessCategory(name: string) {
   return 'Overig';
 }
 
-interface ShopAcc { name: string; category: string; g: number; ml: number; spoonMl: number; counts: Record<string, number> }
+interface ShopAcc { name: string; category: string; g: number; ml: number; spoonMl: number; counts: Record<string, number>; days: Set<number> }
 
 /** Wat de meeste mensen al in huis hebben: apart onderaan, zodat je niet dubbel koopt. */
 const PANTRY_CATEGORY = 'Voorraadkast: heb je dit nog in huis?';
@@ -1395,9 +1402,9 @@ const PANTRY_CATS = new Set(['Kruiden & specerijen', 'Olie, azijn & bakproducten
 const isPantry = (a: ShopAcc) => PANTRY_CATS.has(a.category)
   || (a.g === 0 && a.ml === 0 && !Object.keys(a.counts).length && a.category === 'Conserven & sauzen');
 
-function aggregateShopping(recipes: { details: any; factor: number }[]) {
+function aggregateShopping(recipes: { details: any; factor: number; day?: number }[]) {
   const acc = new Map<string, ShopAcc>();
-  for (const { details, factor } of recipes) {
+  for (const { details, factor, day } of recipes) {
     for (const ing of list(details?.ingredients)) {
       const rawName = String(ing.name || '').trim();
       const key = normTitle(rawName.replace(/\(.*?\)/g, ''));
@@ -1405,9 +1412,10 @@ function aggregateShopping(recipes: { details: any; factor: number }[]) {
       let a = acc.get(key);
       if (!a) {
         a = { name: rawName[0].toUpperCase() + rawName.slice(1), category: ing.category || guessCategory(rawName),
-              g: 0, ml: 0, spoonMl: 0, counts: {} };
+              g: 0, ml: 0, spoonMl: 0, counts: {}, days: new Set() };
         acc.set(key, a);
       }
+      if (typeof day === 'number') a.days.add(day);
       const u = unitInfo(ing.unit);
       const n = (Number(ing.amount) || 0) * u.mult * factor;
       if (u.kind === 'g') a.g += n;
@@ -1417,10 +1425,12 @@ function aggregateShopping(recipes: { details: any; factor: number }[]) {
     }
   }
 
-  const items: { name: string; amount: number; unit: string; category: string }[] = [];
+  const items: { name: string; amount: number; unit: string; category: string; used_in?: number[] }[] = [];
   for (const [key, a] of acc) {
     const category = isPantry(a) ? PANTRY_CATEGORY : a.category;
-    const push = (amount: number, unit: string) => items.push({ name: a.name, amount, unit, category });
+    // In welke dagen dit terugkomt (alleen zinvol bij meer dan één gerecht): "ma · do".
+    const usedIn = a.days.size > 1 && category !== PANTRY_CATEGORY ? [...a.days].sort((x, y) => x - y) : undefined;
+    const push = (amount: number, unit: string) => items.push({ name: a.name, amount, unit, category, ...(usedIn ? { used_in: usedIn } : {}) });
     const before = items.length;
     if (a.g > 0) { const r = shopGrams(a.g); push(r.amount, r.unit); }
     if (a.ml > 0) { const r = shopMl(a.ml + a.spoonMl); push(r.amount, r.unit); }
@@ -1453,7 +1463,8 @@ async function shoppingList(env: Env, b: any, _ctx?: Ctx, actor?: Actor) {
   const ok = details.filter(Boolean);
   if (meals.length && !ok.length) throw new ApiError(503, 'De recepten konden nu niet geladen worden. Probeer het zo nog eens.');
 
-  const items: any[] = aggregateShopping(ok.map(d => ({ details: d, factor: servings / BASE_SERVINGS })));
+  const dayOf = (m: any) => (Number.isInteger(m?.day) && m.day >= 0 && m.day <= 6 ? m.day : undefined);
+  const items: any[] = aggregateShopping(details.map((d: any, i: number) => (d ? { details: d, factor: servings / BASE_SERVINGS, day: dayOf(meals[i]) } : null)).filter(Boolean) as any);
   // Hoeveel ingrediënten in meer dan één gerecht terugkomen: voor "zoveel hergebruik" in de proefbanner.
   if (actor) await recordMilestone(env.DB, actor.who, 'reused',
     countReused(ok.map((d: any) => list(d.ingredients).map((i: any) => String(i.name || ''))))).catch(() => {});
@@ -1660,6 +1671,11 @@ export default {
     const path = new URL(request.url).pathname;
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
 
+    const external = await handleExternal(request, path, ctx);
+    if (external) return external;
+    const billing = await handleBilling(request, env as any, path,
+      async () => (await currentUser(request, env).catch(() => null))?.user || null);
+    if (billing) return billing;
     const auth = await handleAuth(request, env, path);
     if (auth) return auth;
 
@@ -1679,6 +1695,15 @@ export default {
           recipe_bank: await bankStats(env),
           photo_status: await photoStatus(env),
         });
+      }
+      const admin = await handleAdmin(request, env, path);
+      if (admin) return admin;
+      if (request.method === 'POST' && path === '/api/v') return await countVisit(env, await request.json().catch(() => ({})));
+      if (request.method === 'POST' && path === '/api/report') {
+        await ensureSchema(env);
+        const session = await currentUser(request, env).catch(() => null);
+        const who = session ? `u:${session.user.id}` : `ip:${request.headers.get('cf-connecting-ip') || 'onbekend'}`;
+        return await reportRecipe(env, who, await request.json().catch(() => ({})));
       }
       if (path === '/api/email/unsubscribe' && (request.method === 'GET' || request.method === 'POST')) {
         return await unsubscribe(env, new URL(request.url).searchParams.get('t') || '');
@@ -1722,7 +1747,8 @@ export default {
     const run = seedRound(env).then(s => console.log('Receptenbank aangevuld:', JSON.stringify(s)))
       .finally(() => cleanupCounters(env.DB).catch(() => {}))
       .finally(() => runTrialMails(env).then(r => { if (r.sent) console.log('Proef-e-mails:', JSON.stringify(r)); })
-        .catch(e => console.warn('Proef-e-mails mislukt', errMsg(e))));
+        .catch(e => console.warn('Proef-e-mails mislukt', errMsg(e))))
+      .finally(() => cleanupInactiveAccounts(env).catch(e => console.warn('Opruimen accounts mislukt', errMsg(e))));
     if (ctx?.waitUntil) ctx.waitUntil(run); else await run;
   },
 };

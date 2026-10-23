@@ -333,7 +333,7 @@ export const Onboarding: React.FC<Props> = ({ onComplete }) => {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-kooq-white overflow-hidden">
       <div className="absolute inset-0 z-0 transition-opacity duration-1000">
-        <img src="https://images.unsplash.com/photo-1543353071-873f17a7a088?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="Background"/>
+        <img src="/api/ext/unsplash/photo-1543353071-873f17a7a088?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="Background"/>
         <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-white/10 to-white/40 backdrop-blur-[0.5px]"></div>
       </div>
       <div className="w-full max-w-md bg-white/40 p-5 rounded-[2.5rem] relative z-10 backdrop-blur-xl border border-white/30 shadow-2xl flex flex-col justify-between min-h-[500px] max-h-[90vh] overflow-hidden">

@@ -7,7 +7,8 @@
  *      dienstberichten (welkom, proef stopt) altijd;
  *      tips en aanbiedingen alleen met toestemming (vinkje bij registratie of in instellingen),
  *      met afmeldlink in elke mail.
- *    Er gaat pas iets de deur uit als e-mail is ingesteld (RESEND_API_KEY + MAIL_FROM).
+ *    Er gaat pas iets de deur uit als e-mail is ingesteld (RESEND_API_KEY + MAIL_FROM), en alleen naar
+ *    bevestigde e-mailadressen (zo komen er geen mails bij een verkeerd getypt adres).
  */
 import { MailEnv, mailReady, sendMail } from './mail';
 
@@ -36,13 +37,15 @@ async function migrate(db: any) {
     db.prepare(`CREATE TABLE IF NOT EXISTS user_milestones (
       user_id TEXT NOT NULL, key TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, value INTEGER NOT NULL DEFAULT 0,
       first_at INTEGER NOT NULL, last_at INTEGER NOT NULL, PRIMARY KEY (user_id, key))`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS email_verifications (
+      token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS email_log (
       user_id TEXT NOT NULL, kind TEXT NOT NULL, sent_at INTEGER NOT NULL, PRIMARY KEY (user_id, kind))`),
   ]);
   // Toestemming voor tips/aanbiedingen en een afmeldsleutel bij de gebruikers.
   const { results } = await db.prepare('PRAGMA table_info(users)').all();
   const have = new Set((results || []).map((r: any) => r.name));
-  for (const [name, type] of [['marketing_opt_in', 'INTEGER NOT NULL DEFAULT 0'], ['unsub_token', 'TEXT']]) {
+  for (const [name, type] of [['marketing_opt_in', 'INTEGER NOT NULL DEFAULT 0'], ['unsub_token', 'TEXT'], ['email_verified', 'INTEGER NOT NULL DEFAULT 0']]) {
     if (have.has(name)) continue;
     try { await db.prepare(`ALTER TABLE users ADD COLUMN ${name} ${type}`).run(); }
     catch (e: any) { if (!/duplicate column/i.test(String(e?.message))) throw e; }
@@ -203,7 +206,7 @@ export async function runTrialMails(env: EngagementEnv, now = Date.now()) {
   // Alleen accounts die nog in of net na de proef zitten (subscription 'trial' = nog niet betaald).
   const { results } = await env.DB.prepare(
     `SELECT id, name, email, subscription, trial_started_at, marketing_opt_in, unsub_token FROM users
-     WHERE subscription = 'trial' AND trial_started_at IS NOT NULL`).all();
+     WHERE subscription = 'trial' AND trial_started_at IS NOT NULL AND email_verified = 1`).all();
   let sent = 0;
   const errors: string[] = [];
   for (const u of results || []) {
@@ -251,4 +254,42 @@ export async function unsubscribe(env: EngagementEnv, token: string) {
 <main style="max-width:420px;text-align:center"><h1 style="font-size:1.5rem">Je bent afgemeld</h1>
 <p>Je krijgt geen tips en aanbiedingen meer van Qook. Berichten over je account (zoals een nieuw wachtwoord) blijven we wel sturen.</p>
 <p><a href="/app/" style="color:#5E8A69">Naar Qook</a></p></main></body>`, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+}
+
+// ---------------------------------------------------------------------------
+// Accounts die 24 maanden niet gebruikt zijn: een maand vooraf een mail, daarna verwijderen.
+// ---------------------------------------------------------------------------
+const MONTH_MS = 30 * DAY_MS;
+const sqlTime = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+
+export async function cleanupInactiveAccounts(env: EngagementEnv, now = Date.now()) {
+  await ensureEngagementSchema(env.DB);
+  const url = (env.APP_URL || DEFAULT_URL).replace(/\/$/, '');
+  let warned = 0, deleted = 0;
+  // Waarschuwen na 23 maanden (alleen als e-mail werkt en het adres bevestigd is).
+  if (mailReady(env)) {
+    const { results } = await env.DB.prepare(`SELECT u.id, u.name, u.email FROM users u
+      WHERE COALESCE(u.last_login_at, u.created_at) < ? AND u.email_verified = 1
+        AND NOT EXISTS (SELECT 1 FROM email_log l WHERE l.user_id = u.id AND l.kind = 'inactive_warning') LIMIT 20`)
+      .bind(sqlTime(now - 23 * MONTH_MS)).all();
+    for (const u of results || []) {
+      try {
+        await sendMail(env, u.email, 'Je Qook-account wordt over een maand verwijderd',
+          `Hoi ${u.name},\n\nJe hebt Qook bijna twee jaar niet gebruikt. Om je gegevens niet langer te bewaren dan nodig, ` +
+          `verwijderen we je account over een maand.\n\nWil je het houden? Log dan in: ${url}/app/\n\nGroet,\nQook`);
+        await env.DB.prepare('INSERT OR IGNORE INTO email_log (user_id, kind, sent_at) VALUES (?, ?, ?)').bind(u.id, 'inactive_warning', now).run();
+        warned++;
+      } catch { /* volgende ronde opnieuw */ }
+    }
+  }
+  // Verwijderen na 24 maanden (zonder betaald abonnement).
+  const { results: old } = await env.DB.prepare(`SELECT id FROM users WHERE COALESCE(last_login_at, created_at) < ?
+      AND subscription NOT IN ('basic', 'premium', 'culinary') LIMIT 50`).bind(sqlTime(now - 24 * MONTH_MS)).all();
+  for (const u of old || []) {
+    await env.DB.batch(['user_data', 'sessions', 'password_resets', 'user_milestones', 'email_log', 'email_verifications']
+      .map(t => env.DB.prepare(`DELETE FROM ${t} WHERE user_id = ?`).bind(u.id))
+      .concat([env.DB.prepare('DELETE FROM users WHERE id = ?').bind(u.id)])).catch(() => {});
+    deleted++;
+  }
+  return { warned, deleted };
 }
