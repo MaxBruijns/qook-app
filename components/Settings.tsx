@@ -5,6 +5,7 @@ import { Button } from './Shared';
 import { X, Trash2, Heart, Check, Minus, Plus, Leaf, Users, Layout, Utensils, Clock, Banknote, Globe, Languages, MapPin, Lock, Stethoscope, Target, Zap, Settings, ChevronRight, Wine, Wand2, Crown, AlertTriangle, ChevronDown } from 'lucide-react';
 import { useTranslation, getSortedKitchenProfiles } from '../utils/i18n';
 import { getTasteState, setTasteProfile, clearTaste } from '../utils/tasteProfile';
+import type { AccountUser } from '../utils/account';
 import { BUDGET_ZERO_WASTE } from './Onboarding';
 
 interface Props {
@@ -16,6 +17,10 @@ interface Props {
   onUnlock: () => void; 
   userStatus: 'visitor' | 'trial' | 'premium' | 'culinary' | 'basic' | 'free';
   onShowPaywall: (mode: 'premium' | 'culinary') => void;
+  account?: AccountUser | null;
+  onLogin?: () => void;
+  onLogout?: () => void;
+  onDeleteAccount?: (password: string) => void;
 }
 
 const REGIONS: { val: Region, label: string }[] = [
@@ -86,7 +91,7 @@ const CounterControls = ({ value, onChange }: { value: number, onChange: (v: num
   </div>
 );
 
-export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, onUpdate, onReset, onUnlock, userStatus, onShowPaywall }) => {
+export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, onUpdate, onReset, onUnlock, userStatus, onShowPaywall, account, onLogin, onLogout, onDeleteAccount }) => {
   const { t } = useTranslation(preferences.language);
   const [localPrefs, setLocalPrefs] = useState<UserPreferences>(preferences);
   const [showWarning, setShowWarning] = useState(false);
@@ -367,6 +372,22 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                     </SettingRow>
                 </div>
              </Section>
+
+             <section className="pt-8 border-t border-kooq-slate/10 space-y-4">
+                 <h3 className="text-[10px] font-sans font-black text-kooq-slate uppercase tracking-widest">{t.account_title}</h3>
+                 {account ? (
+                     <div className="space-y-3">
+                         <p className="text-sm text-kooq-dark">{t.logged_in_as} <span className="font-sans font-black">{account.name}</span><br /><span className="text-kooq-slate">{account.email}</span></p>
+                         <Button onClick={onLogout} variant="secondary" className="w-full py-4">{t.logout}</Button>
+                         <button onClick={() => { const pw = prompt(t.delete_account_confirm); if (pw) onDeleteAccount?.(pw); }} className="w-full text-center text-[11px] text-red-500 hover:text-red-600 underline underline-offset-4">{t.delete_account}</button>
+                     </div>
+                 ) : (
+                     <div className="space-y-3">
+                         <p className="text-sm text-kooq-slate">{t.account_benefit}</p>
+                         <Button onClick={onLogin} className="w-full py-4">{t.login_or_register}</Button>
+                     </div>
+                 )}
+             </section>
 
              <section className="pt-8 border-t border-kooq-slate/10">
                  <button onClick={() => confirm(t.confirm_reset) && onReset()} className="flex items-center gap-3 text-red-500 hover:text-red-600 text-[10px] font-sans font-black tracking-widest transition-all w-full justify-center py-4 border border-red-50 rounded-2xl hover:bg-red-50 uppercase"><Trash2 size={18} /> {t.reset}</button>

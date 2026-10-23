@@ -20,7 +20,10 @@
  *  - RECIPE_MODEL   (optioneel, standaard gemini-3.8-flash) — volledige recepten (1x per gerecht)
  *  - ADMIN_KEY      (optioneel, secret) — maakt POST /api/admin/seed mogelijk (handmatig aanvullen)
  *  - SEED_DETAILS_PER_RUN / SEED_IMAGES_PER_RUN (optioneel) — hoeveel per cron-ronde
+ *  - PASSWORD_ITERATIONS, RESEND_API_KEY, MAIL_FROM (optioneel) — accounts, zie worker/auth.ts
  */
+
+import { handleAuth } from './auth';
 
 interface Env {
   DB: any;            // D1-database (receptenbank)
@@ -34,6 +37,9 @@ interface Env {
   ADMIN_KEY?: string;
   SEED_DETAILS_PER_RUN?: string;
   SEED_IMAGES_PER_RUN?: string;
+  PASSWORD_ITERATIONS?: string;
+  RESEND_API_KEY?: string;
+  MAIL_FROM?: string;
 }
 
 type Ctx = { waitUntil(p: Promise<any>): void } | undefined;
@@ -1589,6 +1595,9 @@ export default {
   async fetch(request: Request, env: Env, ctx?: Ctx): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
+
+    const auth = await handleAuth(request, env, path);
+    if (auth) return auth;
 
     try {
       if (request.method === 'GET' && path.startsWith('/api/images/')) {
