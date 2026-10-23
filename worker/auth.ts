@@ -17,8 +17,8 @@
 import { mailReady, sendMail as sendMailRaw } from './mail';
 import { ensureEngagementSchema, loadStats, recordMilestone, isClientMilestone } from './engagement';
 
-const sendMail = (env: AuthEnv, to: string, subject: string, text: string) =>
-  sendMailRaw(env, to, subject, text).catch(() => { throw new AuthError(502, 'De e-mail kon niet verstuurd worden. Probeer het later opnieuw.'); });
+const sendMail = (env: AuthEnv, to: string, subject: string, text: string, opts: { html?: string } = {}) =>
+  sendMailRaw(env, to, subject, text, opts).catch(() => { throw new AuthError(502, 'De e-mail kon niet verstuurd worden. Probeer het later opnieuw.'); });
 
 export interface AuthEnv {
   DB: any;
@@ -401,6 +401,34 @@ async function deleteAccount(env: AuthEnv, user: any, b: any) {
   return json({ ok: true }, 200, { 'set-cookie': sessionCookie('', 0) });
 }
 
+const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+
+/** Boodschappenlijst naar het e-mailadres van het account (op verzoek van de gebruiker zelf). */
+async function emailList(env: AuthEnv, user: any, b: any, headers: Record<string, string>) {
+  if (!mailReady(env)) throw new AuthError(501, 'Mailen is nog niet beschikbaar.');
+  const key = `listmail:${user.id}`;
+  if (await tooMany(env, key, 10)) throw new AuthError(429, 'Je hebt vandaag al vaak een lijst gemaild. Probeer het morgen opnieuw.');
+  const sections = (Array.isArray(b.sections) ? b.sections : []).slice(0, 30).map((sec: any) => ({
+    title: String(sec?.title || '').slice(0, 80),
+    items: (Array.isArray(sec?.items) ? sec.items : []).slice(0, 150).map((i: any) => ({
+      name: String(i?.name || '').slice(0, 120), amount: String(i?.amount || '').slice(0, 40), checked: !!i?.checked })),
+  })).filter((sec: any) => sec.items.length);
+  if (!sections.length) throw new AuthError(400, 'De lijst is leeg.');
+
+  const text = sections.map((sec: any) => `${sec.title.toUpperCase()}\n` +
+    sec.items.map((i: any) => `${i.checked ? '[x]' : '[ ]'} ${i.name}${i.amount ? ` – ${i.amount}` : ''}`).join('\n')).join('\n\n');
+  const html = `<div style="font-family:Arial,sans-serif;color:#2A3338;max-width:560px">
+<h1 style="font-size:22px;margin:0 0 4px">Weekboodschappen</h1>
+<p style="color:#5D6E76;margin:0 0 20px">Je lijst van Qook, in de volgorde van de winkel.</p>
+${sections.map((sec: any) => `<h2 style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#5E8A69;margin:18px 0 6px">${esc(sec.title)}</h2>
+<table style="width:100%;border-collapse:collapse;font-size:15px">${sec.items.map((i: any) =>
+    `<tr style="border-bottom:1px solid #E4EAE5${i.checked ? ';color:#9AA5A9;text-decoration:line-through' : ''}"><td style="padding:6px 0">&#9744; ${esc(i.name)}</td><td style="padding:6px 0;text-align:right;color:#5D6E76;white-space:nowrap">${esc(i.amount)}</td></tr>`).join('')}</table>`).join('\n')}
+</div>`;
+  await sendMail(env, user.email, 'Je weekboodschappen van Qook', `Je weekboodschappen van Qook\n\n${text}\n`, { html });
+  await countAttempt(env, key, 24 * 60);
+  return json({ ok: true, to: user.email }, 200, headers);
+}
+
 /** Afhandeling van /api/auth/* en /api/account/*. Geeft null terug voor andere paden. */
 export async function handleAuth(req: Request, env: AuthEnv, path: string): Promise<Response | null> {
   if (!path.startsWith('/api/auth/') && !path.startsWith('/api/account/')) return null;
@@ -415,7 +443,7 @@ export async function handleAuth(req: Request, env: AuthEnv, path: string): Prom
     if (req.method === 'POST' && path === '/api/auth/logout') return await logout(req, env);
     if (req.method === 'POST' && path === '/api/auth/forgot') return await forgot(req, env, body);
     if (req.method === 'POST' && path === '/api/auth/reset') return await resetPassword(env, body);
-    if (req.method === 'GET' && path === '/api/auth/config') return json({ password_reset: mailReady(env) });
+    if (req.method === 'GET' && path === '/api/auth/config') return json({ password_reset: mailReady(env), email: mailReady(env) });
 
     const session = await currentUser(req, env);
     const headers: Record<string, string> = session?.refresh ? { 'set-cookie': session.refresh } : {};
@@ -441,6 +469,7 @@ export async function handleAuth(req: Request, env: AuthEnv, path: string): Prom
       await env.DB.prepare('UPDATE users SET marketing_opt_in = ? WHERE id = ?').bind(optIn ? 1 : 0, session.user.id).run();
       return json({ ok: true, marketing: optIn }, 200, headers);
     }
+    if (req.method === 'POST' && path === '/api/account/email-list') return await emailList(env, session.user, body, headers);
     if (req.method === 'POST' && path === '/api/account/milestone') {
       // Alleen mijlpalen die de app zelf meldt (gekookt, duim omhoog); de rest telt de server zelf.
       if (!isClientMilestone(body.key)) throw new AuthError(400, 'Onbekende mijlpaal');
