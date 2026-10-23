@@ -45,7 +45,7 @@ async function migrate(db: any) {
   // Toestemming voor tips/aanbiedingen en een afmeldsleutel bij de gebruikers.
   const { results } = await db.prepare('PRAGMA table_info(users)').all();
   const have = new Set((results || []).map((r: any) => r.name));
-  for (const [name, type] of [['marketing_opt_in', 'INTEGER NOT NULL DEFAULT 0'], ['unsub_token', 'TEXT'], ['email_verified', 'INTEGER NOT NULL DEFAULT 0']]) {
+  for (const [name, type] of [['marketing_opt_in', 'INTEGER NOT NULL DEFAULT 0'], ['unsub_token', 'TEXT'], ['email_verified', 'INTEGER NOT NULL DEFAULT 0'], ['signup_source', 'TEXT']]) {
     if (have.has(name)) continue;
     try { await db.prepare(`ALTER TABLE users ADD COLUMN ${name} ${type}`).run(); }
     catch (e: any) { if (!/duplicate column/i.test(String(e?.message))) throw e; }

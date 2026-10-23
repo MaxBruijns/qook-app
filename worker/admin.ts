@@ -71,11 +71,15 @@ export async function reportRecipe(env: AdminEnv, who: string, b: any) {
 /** Bezoek tellen: geen cookie, geen IP-adres, alleen een teller per dag per pagina. */
 export async function countVisit(env: AdminEnv, b: any) {
   const page = ['landing', 'app'].includes(b?.p) ? b.p : null;
-  if (!page) return new Response(null, { status: 204 });
+  if (page) await tally(env, page);
+  return new Response(null, { status: 204 });
+}
+
+/** Teller per dag (bezoek, scans). Geen persoonsgegevens. */
+export async function tally(env: AdminEnv, page: string) {
   await ensureAdminSchema(env.DB);
   await env.DB.prepare(`INSERT INTO visits (day, page, count) VALUES (?, ?, 1)
     ON CONFLICT(day, page) DO UPDATE SET count = count + 1`).bind(new Date().toISOString().slice(0, 10), page).run();
-  return new Response(null, { status: 204 });
 }
 
 const isAdmin = (req: Request, env: AdminEnv) => !!env.ADMIN_KEY && req.headers.get('x-admin-key') === env.ADMIN_KEY;
@@ -114,13 +118,23 @@ async function overview(env: AdminEnv) {
     with_photo: await count(db, 'SELECT COUNT(*) AS n FROM recipes WHERE has_image = 1'),
     hidden: await count(db, 'SELECT COUNT(*) AS n FROM recipes WHERE hidden = 1'),
   };
-  const { results: visits } = await db.prepare('SELECT day, page, count FROM visits WHERE day >= ? ORDER BY day')
+  const { results: visits } = await db.prepare(`SELECT day, page, count FROM visits WHERE day >= ? AND page IN ('landing', 'app') ORDER BY day`)
     .bind(iso(now - 13 * DAY_MS).slice(0, 10)).all();
+  // Koelkastscan als ingang: scans door bezoekers en wie zich daarna registreerde (30 dagen).
+  const since30 = iso(now - 30 * DAY_MS);
+  const paidTiers = `('basic', 'premium', 'culinary')`;
+  const scan = {
+    visitor_scans_30d: await count(db, `SELECT COALESCE(SUM(count), 0) AS n FROM visits WHERE page = 'scan_bezoeker' AND day >= ?`, since30.slice(0, 10)),
+    member_scans_30d: await count(db, `SELECT COALESCE(SUM(count), 0) AS n FROM visits WHERE page = 'scan_lid' AND day >= ?`, since30.slice(0, 10)),
+    signups_30d: await count(db, `SELECT COUNT(*) AS n FROM users WHERE signup_source = 'scan' AND created_at >= ?`, since30.replace('T', ' ').slice(0, 19)),
+    signups_total: await count(db, `SELECT COUNT(*) AS n FROM users WHERE signup_source = 'scan'`),
+    paying_total: await count(db, `SELECT COUNT(*) AS n FROM users WHERE signup_source = 'scan' AND subscription IN ${paidTiers}`),
+  };
   const { results: reports } = await db.prepare(`SELECT r.id, r.recipe_id, r.title, r.kind, r.message, r.status, r.created_at,
       COALESCE(x.hidden, 0) AS hidden FROM recipe_reports r LEFT JOIN recipes x ON x.id = r.recipe_id
       ORDER BY (r.status = 'open') DESC, r.created_at DESC LIMIT 60`).all().catch(() => ({ results: [] }));
   const rec = await db.prepare(`SELECT value FROM admin_state WHERE key = 'reconcile'`).first().catch(() => null);
-  return { generated_at: iso(now), users, activity, bank, visits: visits || [], reports: reports || [],
+  return { generated_at: iso(now), users, activity, bank, scan, visits: visits || [], reports: reports || [],
     billing: billingReady(env), reconcile: rec ? JSON.parse(rec.value) : null };
 }
 
