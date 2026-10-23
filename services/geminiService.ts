@@ -26,7 +26,9 @@ const post = async (path: string, body: any) => {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || `Serverfout ${res.status}`);
+    const e: any = new Error(err.detail || `Serverfout ${res.status}`);
+    e.status = res.status;   // 402 = limiet van het abonnement bereikt
+    throw e;
   }
   return res.json();
 };
@@ -221,8 +223,9 @@ export const analyzeFridgeImage = async (base64: string, prefs: UserPreferences)
       recognizedItems: data.recognizedItems || [],
       suggestions: (data.suggestions || []).map((m: any) => toMeal(m, servings, 'magic')),
     };
-  } catch (e) {
+  } catch (e: any) {
     console.error('Koelkastscan mislukt:', e);
+    if (e?.status === 402) throw e;   // limiet: de app toont de abonnementen
     return { recognizedItems: [], suggestions: [] };
   }
 };

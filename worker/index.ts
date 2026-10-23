@@ -23,7 +23,8 @@
  *  - PASSWORD_ITERATIONS, RESEND_API_KEY, MAIL_FROM (optioneel) — accounts, zie worker/auth.ts
  */
 
-import { handleAuth } from './auth';
+import { handleAuth, currentUser, tierOf } from './auth';
+import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
 
 interface Env {
   DB: any;            // D1-database (receptenbank)
@@ -40,7 +41,17 @@ interface Env {
   PASSWORD_ITERATIONS?: string;
   RESEND_API_KEY?: string;
   MAIL_FROM?: string;
+  LIMITS?: string;     // 'off' = geen limieten en volledige AI (alleen voor testen)
 }
+
+const FULL_ACCESS: Actor = { tier: 'premium', who: 'test' };
+/** AI mag gerechten bijmaken voor wie alleen uit de bank krijgt — maar met een daglimiet. */
+async function allowFallback(env: Env, actor?: Actor) {
+  if (!actor || !BANK_ONLY.has(actor.tier)) return;
+  await checkLimit(env.DB, actor, 'fallback');
+  await countUse(env.DB, actor, 'fallback');
+}
+const bankOnly = (actor?: Actor) => !!actor && BANK_ONLY.has(actor.tier);
 
 type Ctx = { waitUntil(p: Promise<any>): void } | undefined;
 
@@ -949,7 +960,7 @@ Antwoord uitsluitend met JSON: {"picks": [7 nummers, voor dag 0 t/m 6], "zero_wa
 }
 
 /** Weekmenu uit de receptenbank. Dagen zonder geschikt gerecht blijven leeg (null). */
-async function pickFromBank(env: Env, prefs: any, b: any, v: Variety, plans: DayPlan[]) {
+async function pickFromBank(env: Env, prefs: any, b: any, v: Variety, plans: DayPlan[], onlyBank = false) {
   const modes = [...new Set(plans.map(p => p.bankMode))];
   const rows = scoreCandidates(await bankCandidates(env, prefs, modes, 160), prefs, v);
   const pool: Candidate[] = [];
@@ -957,7 +968,8 @@ async function pickFromBank(env: Env, prefs: any, b: any, v: Variety, plans: Day
     if (!conflictReason(c, [], v)) pool.push(c);
     if (pool.length >= 60) break;
   }
-  if (pool.length < MIN_POOL) return null;
+  // Wie alleen uit de bank krijgt, gebruikt alles wat er is; anders pas bij genoeg keus.
+  if (!pool.length || (!onlyBank && pool.length < MIN_POOL)) return null;
 
   const week: (Candidate | null)[] = Array(7).fill(null);
   const ok = (c: Candidate, i: number) => {
@@ -968,7 +980,7 @@ async function pickFromBank(env: Env, prefs: any, b: any, v: Variety, plans: Day
   // Korte lijst voor de AI: de beste kandidaten per benodigde modus.
   const shortlist = modes.flatMap(m => pool.filter(c => c.mode === m).slice(0, m === 'culinary' ? 12 : 30));
   let report = '';
-  try {
+  if (!onlyBank) try {
     const r = await aiPick(env, prefs, b, v, plans, shortlist);
     report = r.report;
     r.picks.slice(0, 7).forEach((n, i) => {
@@ -989,7 +1001,7 @@ async function pickFromBank(env: Env, prefs: any, b: any, v: Variety, plans: Day
   return { week, report };
 }
 
-async function weeklyPlan(env: Env, b: any, ctx?: Ctx) {
+async function weeklyPlan(env: Env, b: any, ctx?: Ctx, actor?: Actor) {
   const prefs = b.prefs || {};
   const v = buildVariety(b, prefs);
   const plans = dayPlans(prefs);
@@ -998,7 +1010,7 @@ async function weeklyPlan(env: Env, b: any, ctx?: Ctx) {
 
   if (bankUsable(prefs)) {
     try {
-      const picked = await pickFromBank(env, prefs, b, v, plans);
+      const picked = await pickFromBank(env, prefs, b, v, plans, bankOnly(actor));
       if (picked) {
         const meals = await loadMeals(env, picked.week.filter(Boolean).map(c => c!.id));
         picked.week.forEach((c, i) => { if (c && meals.has(c.id)) days[i] = { ...meals.get(c.id), mode: plans[i].mode }; });
@@ -1011,6 +1023,7 @@ async function weeklyPlan(env: Env, b: any, ctx?: Ctx) {
 
   const gaps = days.map((m, i) => (m ? -1 : i)).filter(i => i >= 0);
   if (gaps.length) {
+    await allowFallback(env, actor);
     const r = await generateForDays(env, prefs, b, v, plans, gaps, days);
     if (!report) report = r.report;
   }
@@ -1163,7 +1176,7 @@ async function replaceFromBank(env: Env, prefs: any, plan: DayPlan, others: any[
   return meal ? { ...meal, mode: plan.mode } : null;
 }
 
-async function replaceMeal(env: Env, b: any, ctx?: Ctx) {
+async function replaceMeal(env: Env, b: any, ctx?: Ctx, actor?: Actor) {
   const prefs = b.prefs || {};
   const dayIndex = Math.min(6, Math.max(0, Number(b.dayIndex) || 0));
   const current = await currentMealInfo(env, b.currentMeal);
@@ -1179,7 +1192,10 @@ async function replaceMeal(env: Env, b: any, ctx?: Ctx) {
     meal = await replaceFromBank(env, prefs, dayPlans(prefs)[dayIndex], others, vReplace, current)
       .catch(e => { console.warn('Vervangen uit de bank mislukt:', errMsg(e)); return null; });
   }
-  if (!meal) meal = await generateOneMeal(env, prefs, dayIndex, others, v, b.favoriteTitles, current.title, current);
+  if (!meal) {
+    await allowFallback(env, actor);
+    meal = await generateOneMeal(env, prefs, dayIndex, others, v, b.favoriteTitles, current.title, current);
+  }
   await saveRecipes(env, [meal]);
   background(ctx, () => prewarm(env, [meal], prefs));
   return meal;
@@ -1580,7 +1596,7 @@ async function bankStats(env: Env) {
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
-const POST_ROUTES: Record<string, (env: Env, body: any, ctx?: Ctx) => Promise<any>> = {
+const POST_ROUTES: Record<string, (env: Env, body: any, ctx?: Ctx, actor?: Actor) => Promise<any>> = {
   '/api/weekly-plan': weeklyPlan,
   '/api/replace-meal': replaceMeal,
   '/api/full-recipe': fullRecipe,
@@ -1625,10 +1641,23 @@ export default {
       const handler = POST_ROUTES[path];
       if (request.method === 'POST' && handler) {
         const body = await request.json().catch(() => ({}));
-        return json(await handler(env, body, ctx));
+        // Wie is dit (account of IP-adres) en welke rechten horen erbij?
+        let actor = FULL_ACCESS;
+        if (env.LIMITS !== 'off') {
+          const session = await currentUser(request, env).catch(() => null);
+          actor = session
+            ? { tier: tierOf(session.user), who: `u:${session.user.id}` }
+            : { tier: 'visitor', who: `ip:${request.headers.get('cf-connecting-ip') || 'onbekend'}` };
+        }
+        const action = env.LIMITS !== 'off' ? ROUTE_ACTIONS[path] : undefined;
+        if (action) await checkLimit(env.DB, actor, action);
+        const result = await handler(env, body, ctx, actor);
+        if (action) await countUse(env.DB, actor, action);
+        return json(result);
       }
       return json({ detail: 'Niet gevonden' }, 404);
     } catch (e: any) {
+      if (e instanceof LimitError) return json({ detail: e.message, limit: true }, e.status);
       const status = e instanceof ApiError ? e.status : 500;
       if (status >= 500 || status === 429) console.error(path, e?.stack || e);
       return json({ detail: e instanceof ApiError ? e.message : 'Er ging iets mis op de server' }, status);
@@ -1637,7 +1666,8 @@ export default {
 
   /** Geplande taak: receptenbank aanvullen. */
   async scheduled(_controller: any, env: Env, ctx: Ctx) {
-    const run = seedRound(env).then(s => console.log('Receptenbank aangevuld:', JSON.stringify(s)));
+    const run = seedRound(env).then(s => console.log('Receptenbank aangevuld:', JSON.stringify(s)))
+      .finally(() => cleanupCounters(env.DB).catch(() => {}));
     if (ctx?.waitUntil) ctx.waitUntil(run); else await run;
   },
 };

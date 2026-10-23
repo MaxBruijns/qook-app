@@ -5,6 +5,7 @@
  *  - Wachtwoorden: PBKDF2-SHA256 met een eigen salt per gebruiker (nooit leesbaar opgeslagen).
  *  - Sessies: willekeurige sleutel in een HttpOnly-cookie; in de database staat alleen de hash.
  *  - Te veel foute pogingen: tijdelijk geblokkeerd (per e-mailadres en per IP-adres).
+ *  - Proefperiode: 14 dagen met Premium-functies (gerechten uit de receptenbank), daarna gratis.
  *  - Gegevens: de app bewaart instellingen, weekmenu, favorieten, smaakprofiel en geschiedenis
  *    per account, zodat ze op elk apparaat hetzelfde zijn.
  *
@@ -53,7 +54,7 @@ export function ensureAuthSchema(env: AuthEnv) {
         email TEXT NOT NULL UNIQUE,
         name TEXT NOT NULL DEFAULT '',
         password TEXT NOT NULL,
-        subscription TEXT NOT NULL DEFAULT 'basic',
+        subscription TEXT NOT NULL DEFAULT 'trial',
         trial_started_at TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         last_login_at TEXT
@@ -219,18 +220,28 @@ export async function currentUser(req: Request, env: AuthEnv): Promise<{ user: a
   return { user: row, refresh };
 }
 
-/** Abonnement zoals de app het moet tonen: na 14 dagen proef zonder betaling terug naar gratis. */
-function effectiveSubscription(u: any) {
-  if (u.subscription === 'basic' && u.trial_started_at) {
-    const ends = new Date(u.trial_started_at).getTime() + TRIAL_DAYS * DAY_MS;
-    if (Date.now() > ends) return 'free';
+/**
+ * Rechten van een gebruiker op dit moment. Een nieuw account krijgt 14 dagen proef met
+ * Premium-functies (gerechten uit de receptenbank); daarna zonder betaling terug naar gratis.
+ */
+export function tierOf(u: any): 'visitor' | 'free' | 'basic' | 'trial' | 'premium' | 'culinary' {
+  if (!u) return 'visitor';
+  if (u.subscription === 'trial') {
+    const ends = new Date(u.trial_started_at || 0).getTime() + TRIAL_DAYS * DAY_MS;
+    return Date.now() <= ends ? 'trial' : 'free';
   }
-  return u.subscription || 'free';
+  return ['free', 'basic', 'premium', 'culinary'].includes(u.subscription) ? u.subscription : 'free';
 }
 
-const publicUser = (u: any) => ({
-  name: u.name, email: u.email, subscription: effectiveSubscription(u), trial_started_at: u.trial_started_at || null,
-});
+/** Voor de app: een proefperiode is "premium" met een startdatum (zo toont de app de resterende dagen). */
+const publicUser = (u: any) => {
+  const tier = tierOf(u);
+  return {
+    name: u.name, email: u.email,
+    subscription: tier === 'trial' ? 'premium' : tier,
+    trial_started_at: tier === 'trial' ? u.trial_started_at : null,
+  };
+};
 
 async function loadData(env: AuthEnv, userId: string) {
   const { results } = await env.DB.prepare('SELECT key, value, updated_at FROM user_data WHERE user_id = ?').bind(userId).all();
@@ -296,7 +307,7 @@ async function register(req: Request, env: AuthEnv, b: any) {
   const trial = new Date().toISOString();
   try {
     await env.DB.prepare(`INSERT INTO users (id, email, name, password, subscription, trial_started_at, last_login_at)
-      VALUES (?, ?, ?, ?, 'basic', ?, CURRENT_TIMESTAMP)`).bind(id, email, name, await hashPassword(env, password), trial).run();
+      VALUES (?, ?, ?, ?, 'trial', ?, CURRENT_TIMESTAMP)`).bind(id, email, name, await hashPassword(env, password), trial).run();
   } catch (e: any) {
     if (/unique/i.test(String(e?.message))) throw new AuthError(409, 'Er bestaat al een account met dit e-mailadres.');
     throw e;
@@ -304,7 +315,7 @@ async function register(req: Request, env: AuthEnv, b: any) {
   await countAttempt(env, `reg:${ip}`, 60);
   // Wat de bezoeker al in de app had (instellingen, weekmenu, ...) gaat mee naar het account.
   if (b.data && typeof b.data === 'object') await saveData(env, id, b.data).catch(e => console.warn('Gegevens meenemen mislukt', e?.message));
-  const user = { id, email, name, subscription: 'basic', trial_started_at: trial };
+  const user = { id, email, name, subscription: 'trial', trial_started_at: trial };
   return json({ user: publicUser(user), data: await loadData(env, id) }, 201, { 'set-cookie': await createSession(env, id) });
 }
 
