@@ -1,24 +1,32 @@
-# Tijdelijk: werkt package-lock.json bij voor Tailwind 3.4.17 (wordt daarna weer verwijderd).
-name: Lockfile bijwerken
+# Tijdelijk: visuele vergelijking oud (Tailwind-script) tegen nieuw (gebouwd CSS). Wordt daarna verwijderd.
+name: Tailwind vergelijken
 on:
   push:
     branches: [tailwind-bouw]
 permissions:
   contents: write
 jobs:
-  lock:
+  vergelijk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
+          cache: npm
+      - run: npm ci
       - run: npm run build
-      - run: ls dist/assets && grep -l "bg-kooq-sage" dist/assets/*.css
+      - run: pip install playwright pillow && python -m playwright install --with-deps chromium
       - run: |
+          python .github/check/vergelijk.py
+        shell: bash
+        working-directory: .
+      - name: Schermafbeeldingen naar aparte branch
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git diff --cached --quiet || git commit -m "package-lock bijgewerkt voor Tailwind 3.4.17"
-          git push
+          git checkout --orphan tailwind-vergelijk
+          git rm -rq --cached .
+          git add -f vergelijk/*.png
+          git commit -qm "Schermafbeeldingen Tailwind-vergelijking"
+          git push -f origin tailwind-vergelijk
