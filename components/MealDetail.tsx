@@ -1,7 +1,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { Meal, UserPreferences } from '../types';
-import { generateFullRecipe, generateMealImage } from '../services/geminiService';
+import { generateFullRecipe, generateMealImage, realPhoto } from '../services/geminiService';
+import { MealPhotoPlaceholder } from './Shared';
 import { Button, Badge, Card } from './Shared';
 import { Clock, Flame, ArrowLeft, Lock, Utensils, Play, Check, Heart, Wine, Plus, Coffee, Sparkles, User, Mail, Key, Users, Zap, Star, Package, Layout, Wrench } from 'lucide-react';
 import { useTranslation } from '../utils/i18n';
@@ -72,19 +73,21 @@ export const MealDetail: React.FC<Props> = ({
     const [fullMeal, setFullMeal] = useState<Meal>(meal);
     const [loading, setLoading] = useState(false);
     
-    const [imgUrl, setImgUrl] = useState<string>(meal.generated_image_url || '/api/ext/unsplash/photo-1543353071-873f17a7a088?q=80&w=800&auto=format&fit=crop');
+    const [imgUrl, setImgUrl] = useState<string | null>(realPhoto(meal.generated_image_url) || null);
     
     const isCulinaryMode = meal.mode === 'culinary';
     const isLocked = !isPremium && !isFreeMeal;
 
     useEffect(() => {
         setFullMeal(meal);
-        if (meal.generated_image_url) {
-            setImgUrl(meal.generated_image_url);
+        const known = realPhoto(meal.generated_image_url);
+        if (known) {
+            setImgUrl(known);
         } else {
+            setImgUrl(null);
             generateMealImage(meal.title, meal.ai_image_prompt || meal.title).then(url => {
                 setImgUrl(url);
-                meal.generated_image_url = url;
+                if (url) meal.generated_image_url = url;
             });
         }
     }, [meal]);
@@ -109,7 +112,7 @@ export const MealDetail: React.FC<Props> = ({
     return (
         <div className={`min-h-screen pb-40 animate-in slide-in-from-right-10 duration-500 relative ${isCulinaryMode ? 'bg-kooq-dark' : 'bg-white'}`}>
             <div className="relative h-72 md:h-96 w-full overflow-hidden bg-kooq-white">
-                <img src={imgUrl} className="w-full h-full object-cover" alt={meal.title} />
+                {imgUrl ? <img src={imgUrl} className="w-full h-full object-cover" alt={meal.title} /> : <MealPhotoPlaceholder dark={isCulinaryMode} />}
                 <div className={`absolute inset-0 bg-gradient-to-t ${isCulinaryMode ? 'from-kooq-dark via-kooq-dark/20' : 'from-black/60'} to-transparent`}></div>
                 
                 <button onClick={onBack} className={`absolute top-6 left-6 p-3 ${isCulinaryMode ? 'bg-white/10 text-white' : 'bg-white/90 text-kooq-dark'} backdrop-blur-md rounded-full shadow-lg z-10 transition-transform active:scale-90`}>

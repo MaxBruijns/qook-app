@@ -41,19 +41,22 @@ const toMeal = (m: any, servings: number, mode?: string): Meal => ({
   ...m,
   servings,
   mode: (mode || m.mode || 'premium') as any,
-  generated_image_url: m.image_url || m.generated_image_url || undefined,
+  generated_image_url: realPhoto(m.image_url || m.generated_image_url),
 });
 
-const FALLBACK_IMAGE = (title: string) =>
-  `/api/ext/unsplash/photo-1546069901-ba9599a7e63c?q=80&w=800&auto=format&fit=crop&sig=${encodeURIComponent(title)}`;
+// Vroeger kreeg een gerecht zonder foto een algemene stockfoto. Die past niet bij het
+// gerecht; zulke adressen behandelen we als 'nog geen foto' zodat het opnieuw wordt geprobeerd.
+const STOCK_FALLBACK = 'photo-1546069901-ba9599a7e63c';
+export const realPhoto = (url?: string | null): string | undefined =>
+  url && !url.includes(STOCK_FALLBACK) && !url.startsWith('data:') ? url : undefined;
 
 // --- MAALTIJDFOTO ---------------------------------------------------------
 // De backend maakt per gerecht één keer een foto en bewaart die.
-export const generateMealImage = async (title: string, aiPrompt: string): Promise<string> => {
+export const generateMealImage = async (title: string, aiPrompt: string): Promise<string | null> => {
   const cacheKey = `qook_img_${btoa(encodeURIComponent(title)).slice(0, 32)}`;
   try {
     const cached = localStorage.getItem(cacheKey);
-    if (cached && !cached.startsWith('data:')) return cached;
+    if (realPhoto(cached)) return cached!;
   } catch {}
 
   try {
@@ -63,9 +66,9 @@ export const generateMealImage = async (title: string, aiPrompt: string): Promis
       return url;
     }
   } catch (e) {
-    console.warn('Foto ophalen mislukt, standaardfoto gebruikt:', e);
+    console.warn('Foto nog niet beschikbaar:', e);
   }
-  return FALLBACK_IMAGE(title);
+  return null; // geen foto: het scherm toont een neutrale plek en probeert het later opnieuw
 };
 
 // --- SMAAKPROFIEL ---------------------------------------------------------

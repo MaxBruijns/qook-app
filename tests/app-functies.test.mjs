@@ -65,7 +65,10 @@ assert.equal(await svc.generateMealImage('Pasta pesto', 'x'), u1);
 assert.equal(aiCalls, 1);
 const img = await worker.fetch(new Request(`https://kooq.test${u1}`), env);
 assert.equal(img.status, 200); assert.equal(img.headers.get('content-type'), 'image/jpeg');
-assert.match(await svc.generateMealImage('Onbekend gerecht', 'x'), /unsplash/);
+// Geen foto: geen stockfoto van iets anders, maar null (het scherm toont een neutrale plek).
+assert.equal(await svc.generateMealImage('Onbekend gerecht', 'x'), null);
+assert.equal(svc.realPhoto('/api/ext/unsplash/photo-1546069901-ba9599a7e63c?w=800'), undefined, 'oude stockfoto genegeerd');
+assert.equal(svc.realPhoto('/api/images/abc.jpg'), '/api/images/abc.jpg');
 assert.equal(aiCalls, 1, 'geen foto voor gerechten buiten de bank');
 
 // 3. Nieuw menu met bekend gerecht -> hergebruik incl. foto
