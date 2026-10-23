@@ -47,7 +47,7 @@ const stripImages = (p: WeeklyPlan): WeeklyPlan => ({
 
 type AuthMode = 'login' | 'register' | 'forgot' | 'reset';
 
-const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: AuthMode) => void, onBack: () => void, onSuccess: (user: AccountUser, mode: AuthMode) => void, t: any }> = ({ mode, resetToken, onSwitch, onBack, onSuccess, t }) => {
+const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, source?: string, onSwitch: (m: AuthMode) => void, onBack: () => void, onSuccess: (user: AccountUser, mode: AuthMode) => void, t: any }> = ({ mode, resetToken, source, onSwitch, onBack, onSuccess, t }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -69,7 +69,7 @@ const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: Au
     setLoading(true);
     try {
         if (mode === 'login') onSuccess(await login(email, password), mode);
-        else if (mode === 'register') onSuccess(await register(name, email, password, marketing), mode);
+        else if (mode === 'register') onSuccess(await register(name, email, password, marketing, source), mode);
         else if (mode === 'reset') onSuccess(await resetPassword(resetToken || '', password), mode);
         else { await requestPasswordReset(email); setInfo(t.forgot_sent); }
     } catch (err: any) {
@@ -96,6 +96,7 @@ const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: Au
                     <div className="w-16 h-16 bg-kooq-sage rounded-2xl flex items-center justify-center text-white mx-auto shadow-lg mb-4 font-sans font-black text-2xl">Q</div>
                     <h2 className="text-3xl font-sans font-black text-kooq-dark tracking-tighter">{title}</h2>
                     {mode === 'forgot' && <p className="text-sm text-kooq-slate">{t.forgot_intro}</p>}
+                    {mode === 'register' && source === 'scan' && <p className="text-sm text-kooq-slate font-medium">{t.scan_signup_intro}</p>}
                 </div>
                 {mode === 'forgot' && resetAvailable === false ? (
                     <p className="text-sm text-kooq-slate text-center leading-relaxed">{t.forgot_unavailable}</p>
@@ -164,6 +165,8 @@ export default function App() {
   const [userStatus, setUserStatus] = useState<SubscriptionStatus>('free');
   // Link uit de e-mail "wachtwoord vergeten": /app/?reset=<sleutel>
   const [resetToken] = useState(() => new URLSearchParams(window.location.search).get('reset') || '');
+  // Vanaf de voorpagina "Scan gratis je koelkast": de scanknop krijgt de aandacht.
+  const [scanFirst] = useState(() => new URLSearchParams(window.location.search).get('scan') === '1');
   const [view, setView] = useState<'choice' | 'onboarding' | 'dashboard' | 'favorites' | 'meal-detail' | 'cooking' | 'shopping' | 'scan-results' | AuthMode>(resetToken ? 'reset' : 'choice');
   const [account] = useState<AccountUser | null>(() => getAccount());
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
@@ -194,6 +197,9 @@ export default function App() {
   const [replacingId, setReplacingId] = useState<string | null>(null);
   const [loadingType, setLoadingType] = useState<'plan' | 'list' | 'scan'>('plan');
   const [scanResult, setScanResult] = useState<FridgeScanResult | null>(null);
+  // Registreren vanuit een gratis koelkastscan: daarna direct terug naar het gekozen recept.
+  const [signupSource, setSignupSource] = useState<string | null>(null);
+  const fromScan = (m: Meal | null) => !!m && !!scanResult?.suggestions.some(x => x.id === m.id);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const agendaRef = useRef<HTMLElement>(null);
@@ -414,6 +420,8 @@ export default function App() {
     setUserStatus(user.subscription as SubscriptionStatus);
     localStorage.setItem('qook_prefs', JSON.stringify(updatedPrefs));
     setShowTrialSuccess(true);
+    if (signupSource === 'scan' && scanResult) setView(selectedMeal && fromScan(selectedMeal) ? 'meal-detail' : 'scan-results');
+    setSignupSource(null);
   };
 
   const handleLogout = async () => {
@@ -589,7 +597,7 @@ export default function App() {
               </div>
               <ArrowRight className="text-kooq-slate/30 group-hover:text-kooq-sage transition-colors" size={24} />
             </button>
-            <button onClick={() => fileInputRef.current?.click()} className="w-full group bg-white/95 backdrop-blur-md p-7 rounded-[2.5rem] flex items-center text-left gap-6 border border-white shadow-xl hover:shadow-2xl transition-all active:scale-[0.98]">
+            <button onClick={() => fileInputRef.current?.click()} className={`w-full group bg-white/95 backdrop-blur-md p-7 rounded-[2.5rem] flex items-center text-left gap-6 border shadow-xl hover:shadow-2xl transition-all active:scale-[0.98] ${scanFirst ? 'border-kooq-clementine ring-4 ring-kooq-clementine/40' : 'border-white'}`}>
               <div className="w-16 h-16 bg-kooq-clementine/10 text-kooq-clementine rounded-2xl flex items-center justify-center"><Camera size={32} /></div>
               <div className="flex-1">
                   <h3 className="text-xl font-sans font-black tracking-tighter text-kooq-dark">{t.choice_scan_title}</h3>
@@ -664,7 +672,7 @@ export default function App() {
             </div>
         )}
         {(view === 'login' || view === 'register' || view === 'forgot' || view === 'reset') && (
-            <AuthView mode={view} resetToken={resetToken} onSwitch={(m) => setView(m)} onBack={() => { if (resetToken) window.history.replaceState(null, '', '/app/'); setView(plan ? 'dashboard' : 'choice'); }} onSuccess={handleAuthSuccess} t={t} />
+            <AuthView mode={view} resetToken={resetToken} source={signupSource || undefined} onSwitch={(m) => setView(m)} onBack={() => { if (resetToken) window.history.replaceState(null, '', '/app/'); if (signupSource === 'scan' && scanResult) { setSignupSource(null); setView('scan-results'); return; } setView(plan ? 'dashboard' : 'choice'); }} onSuccess={handleAuthSuccess} t={t} />
         )}
         {view === 'dashboard' && plan && preferences && (
           <Dashboard 
@@ -728,7 +736,7 @@ export default function App() {
           />
         )}
         {view === 'meal-detail' && selectedMeal && (
-          <MealDetail meal={selectedMeal} isPremium={userStatus !== 'free'} isFreeMeal={userStatus === 'free' && plan?.days[0]?.id === selectedMeal.id} userPrefs={preferences!} onBack={() => setView('dashboard')} onStartCooking={handleStartCooking} onShowPaywall={() => setShowPaywall(true)} onToggleList={toggleShopItem} isSelected={selectedMealIds.has(selectedMeal.id)} onSelectSuggestion={(m) => setSelectedMeal(m)} isFavorite={favoriteIds.includes(selectedMeal.id)} onToggleFavorite={() => toggleFavorite(selectedMeal.id)} selectedMealIds={selectedMealIds} onUnlock={() => setView('register')} />
+          <MealDetail meal={selectedMeal} isPremium={userStatus !== 'free'} isFreeMeal={userStatus === 'free' && plan?.days[0]?.id === selectedMeal.id} userPrefs={preferences || ({ language: currentLang } as any)} onBack={() => setView(fromScan(selectedMeal) ? 'scan-results' : 'dashboard')} lockedFromScan={!account && fromScan(selectedMeal)} onStartCooking={handleStartCooking} onShowPaywall={() => setShowPaywall(true)} onToggleList={toggleShopItem} isSelected={selectedMealIds.has(selectedMeal.id)} onSelectSuggestion={(m) => setSelectedMeal(m)} isFavorite={favoriteIds.includes(selectedMeal.id)} onToggleFavorite={() => toggleFavorite(selectedMeal.id)} selectedMealIds={selectedMealIds} onUnlock={() => { if (account) { setShowPaywall(true); return; } if (fromScan(selectedMeal)) setSignupSource('scan'); setView('register'); }} />
         )}
         {view === 'favorites' && preferences && (
             <FavoritesView favoriteMeals={allFavoriteMeals()} favoriteIds={favoriteIds} onMealSelect={(m) => { setSelectedMeal(m); setView('meal-detail'); }} onToggleFavorite={(m) => toggleFavorite(m.id)} onBack={() => setView('dashboard')} language={currentLang} isPremium={userStatus !== 'free'} hasHealthMode={userStatus === 'culinary'} selectedMealIds={selectedMealIds} onToggleShopItem={toggleShopItem} />
@@ -737,6 +745,23 @@ export default function App() {
             <div className="p-6 max-w-5xl mx-auto space-y-6">
                 <button onClick={() => setView('choice')} className="flex items-center gap-2 text-kooq-slate font-bold"><ArrowLeft size={18}/> {t.cancel}</button>
                 <h2 className="text-2xl font-sans font-black text-kooq-dark tracking-tighter">{t.scan_results_title}</h2>
+                {scanResult.recognizedItems.length > 0 && (
+                    <div className="space-y-2">
+                        <p className="text-xs font-sans font-black uppercase tracking-widest text-kooq-slate/70">{t.scan_recognized}</p>
+                        <div className="flex flex-wrap gap-2">
+                            {scanResult.recognizedItems.slice(0, 20).map((item, i) => <span key={i} className="px-3 py-1.5 rounded-full bg-white border border-kooq-slate/10 text-sm text-kooq-dark font-medium">{item}</span>)}
+                        </div>
+                    </div>
+                )}
+                {!account && (
+                    <div className="bg-kooq-dark text-white rounded-[2rem] p-6 flex flex-col md:flex-row md:items-center gap-4 shadow-xl">
+                        <div className="flex-1 space-y-1">
+                            <p className="font-sans font-black text-lg tracking-tight">{t.scan_banner_title}</p>
+                            <p className="text-sm text-white/70 font-medium">{t.scan_banner_text}</p>
+                        </div>
+                        <button onClick={() => { setSignupSource('scan'); setView('register'); }} className="bg-kooq-sage text-white font-sans font-black rounded-2xl px-6 py-4 whitespace-nowrap active:scale-[0.98] transition-transform">{t.scan_banner_btn}</button>
+                    </div>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {scanResult.suggestions.map(m => ( <Dashboard.MealCard key={m.id} meal={m} onClick={() => { setSelectedMeal(m); setView('meal-detail'); }} selectedMealIds={selectedMealIds} onToggleShopItem={toggleShopItem} t={t} language={currentLang} /> ))}
                 </div>
