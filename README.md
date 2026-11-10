@@ -50,3 +50,17 @@ nieuwe gerechten per categorie (Hollands, Europees, wereld, kindvriendelijk, veg
 drie culinaire categorieën; samen ±310), daarna volledige recepten en foto's. Een weekmenu wordt
 eerst uit de bank samengesteld; de AI maakt alleen wat ontbreekt. De voortgang zie je op `/api/health`
 onder `recipe_bank`.
+
+## Accounts
+
+Bezoekers kunnen een account maken met naam, e-mailadres en wachtwoord. Wachtwoorden worden met
+PBKDF2 (100.000 rondes, eigen salt) opgeslagen; sessies staan in een HttpOnly-cookie. Instellingen,
+weekmenu, favorieten, smaakprofiel en geschiedenis worden per account bewaard en op elk apparaat
+gesynchroniseerd. Uitloggen wist de gegevens van het apparaat; "Account verwijderen" wist alles.
+
+- `PASSWORD_ITERATIONS` (variabele, optioneel): standaard 100000. Dat kost ±30–50 ms rekentijd per
+  inlog; het gratis Workers-abonnement staat 10 ms per aanvraag toe. Daarom: Workers Paid ($5/maand),
+  of tijdelijk een lagere waarde (minimaal 10000). Bij een latere verhoging worden wachtwoorden bij
+  de volgende inlog automatisch sterker versleuteld.
+- `RESEND_API_KEY` + `MAIL_FROM` (optioneel): zet je deze (vereist een eigen domein bij Resend), dan
+  werkt "Wachtwoord vergeten" via e-mail. Zonder deze instellingen toont de app dat dit nog niet kan.
