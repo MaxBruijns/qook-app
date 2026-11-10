@@ -10,7 +10,11 @@ export interface AccountUser {
   email: string;
   subscription: 'free' | 'basic' | 'premium' | 'culinary';
   trial_started_at: string | null;
+  marketing?: boolean;
 }
+
+/** Wat iemand al met Qook gedaan heeft (aantallen), voor de proefbanner. */
+export type AccountStats = Partial<Record<'plans' | 'lists' | 'recipes' | 'replaced' | 'scans' | 'cooked' | 'liked' | 'reused', number>>;
 
 export const SYNC_KEYS = ['qook_prefs', 'qook_current_plan', 'qook_favorites', 'qook_favorite_meals', 'qook_usage',
   'qook_taste', 'qook_meal_history', 'qook_pantry_have', 'qook_shop_order'];
@@ -21,11 +25,15 @@ const DEBOUNCE_MS = 2000;
 type ServerData = Record<string, { value: string; updated_at: number }>;
 
 let current: AccountUser | null = null;
+let stats: AccountStats = {};
+const STATS_KEY = 'qook_stats';
 let rawSet: ((k: string, v: string) => void) | null = null;
 const dirty = new Set<string>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 
 export const getAccount = () => current;
+export const getStats = (): AccountStats => stats;
+const setStats = (s: any) => { stats = s && typeof s === 'object' ? s : {}; try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch {} };
 
 const api = async (path: string, method = 'GET', body?: any, keepalive = false) => {
   const res = await fetch(`/api${path}`, {
@@ -133,7 +141,7 @@ export const bootstrapAccount = async () => {
     const t = setTimeout(() => ctrl.abort(), 4000);
     const res = await fetch('/api/auth/me', { credentials: 'same-origin', signal: ctrl.signal });
     clearTimeout(t);
-    const { user, data } = await res.json();
+    const { user, data, stats: st } = await res.json();
     if (!user) {
       current = null;
       localStorage.removeItem(ACCOUNT_KEY);
@@ -141,18 +149,21 @@ export const bootstrapAccount = async () => {
     }
     applyServerData(data);
     applyUser(user);
+    setStats(st);
     // Wat hier staat maar nog niet in het account (bv. offline gemaakt): alsnog meesturen.
     for (const k of Object.keys(collectLocalData())) if (!data?.[k]) markDirty(k);
     return user as AccountUser;
   } catch {
     // Geen verbinding: verder met wat dit apparaat al wist.
     current = readJson(ACCOUNT_KEY, null);
+    stats = readJson(STATS_KEY, {});
     return current;
   }
 };
 
 export const login = async (email: string, password: string) => {
-  const { user, data } = await api('/auth/login', 'POST', { email, password });
+  const { user, data, stats: st } = await api('/auth/login', 'POST', { email, password });
+  setStats(st);
   // Het account is leidend; wat het account nog niet heeft, nemen we van dit apparaat mee.
   const local = collectLocalData();
   applyServerData(data, true);
@@ -162,8 +173,9 @@ export const login = async (email: string, password: string) => {
   return user as AccountUser;
 };
 
-export const register = async (name: string, email: string, password: string) => {
-  const { user, data } = await api('/auth/register', 'POST', { name, email, password, data: collectLocalData() });
+export const register = async (name: string, email: string, password: string, marketing = false) => {
+  const { user, data, stats: st } = await api('/auth/register', 'POST', { name, email, password, marketing, data: collectLocalData() });
+  setStats(st);
   applyServerData(data, true);
   applyUser(user);
   return user as AccountUser;
@@ -171,7 +183,7 @@ export const register = async (name: string, email: string, password: string) =>
 
 /** Gegevens van dit apparaat wissen (bij uitloggen of account verwijderen). */
 const clearLocal = () => {
-  for (const k of [...SYNC_KEYS, ACCOUNT_KEY, STAMPS_KEY]) localStorage.removeItem(k);
+  for (const k of [...SYNC_KEYS, ACCOUNT_KEY, STAMPS_KEY, STATS_KEY]) localStorage.removeItem(k);
 };
 
 export const logout = async () => {
@@ -214,4 +226,24 @@ export const resetPassword = async (token: string, password: string) => {
   applyServerData(data, true);
   applyUser(user);
   return user as AccountUser;
+};
+
+/** Tips en aanbiedingen per e-mail aan of uit. */
+export const setMarketing = async (optIn: boolean) => {
+  if (!current) return;
+  await api('/account/marketing', 'POST', { opt_in: optIn });
+  current = { ...current, marketing: optIn };
+  setRaw(ACCOUNT_KEY, JSON.stringify(current));
+};
+
+/** Mijlpaal die alleen de app ziet (gekookt, duim omhoog). Mislukt dit, dan is dat niet erg. */
+export const trackMilestone = (key: 'cooked' | 'liked') => {
+  if (!current) return;
+  stats = { ...stats, [key]: (stats[key] || 0) + 1 };
+  api('/account/milestone', 'POST', { key }).catch(() => {});
+};
+
+/** Lokaal bijhouden tot de volgende keer dat de app opent (de server telt zelf ook). */
+export const bumpStat = (key: keyof AccountStats, value?: number) => {
+  stats = { ...stats, [key]: value ?? ((stats[key] || 0) + 1) };
 };

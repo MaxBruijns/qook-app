@@ -5,7 +5,7 @@ import { MealDetail } from './components/MealDetail';
 import { CookingMode } from './components/CookingMode';
 import { ShoppingList } from './components/ShoppingList';
 import { ChatAssistant } from './components/Chat';
-import { Header, PaywallModal, Button, Notices } from './components/Shared';
+import { Header, PaywallModal, Button, Notices, TrialEndingModal } from './components/Shared';
 import { notify } from './utils/notify';
 import { SettingsModal } from './components/Settings';
 import { FavoritesView } from './components/FavoritesView';
@@ -13,7 +13,7 @@ import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult, Subs
 import { generateWeeklyPlan, generateShoppingList, analyzeFridgeImage, replaceMeal } from './services/geminiService';
 import { useTranslation, detectUserLocale } from './utils/i18n';
 import { recordTaste } from './utils/tasteProfile';
-import { AccountUser, getAccount, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword } from './utils/account';
+import { AccountUser, getAccount, getStats, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword, setMarketing, trackMilestone, bumpStat } from './utils/account';
 import { Calendar, Camera, ArrowRight, User, Mail, Lock, ArrowLeft, Globe, ChevronDown, Check, PartyPopper, Loader2, Info } from 'lucide-react';
 
 function getWeekNumber(d: Date) {
@@ -34,6 +34,10 @@ const rememberPantry = (name: string, have: boolean) => {
     if (have) next.push(key);
     try { localStorage.setItem(PANTRY_KEY, JSON.stringify(next.slice(-200))); } catch {}
 };
+/** Een melding maar één keer laten zien (per apparaat). */
+const firstTime = (key: string) => {
+    try { if (localStorage.getItem(key)) return false; localStorage.setItem(key, '1'); return true; } catch { return false; }
+};
 const allMealIds = (p: WeeklyPlan | null) => new Set((p?.days || []).map(m => m.id));
 
 const stripImages = (p: WeeklyPlan): WeeklyPlan => ({
@@ -47,6 +51,7 @@ const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: Au
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [marketing, setMarketingChoice] = useState(false);   // bewust niet vooraf aangevinkt
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
@@ -64,7 +69,7 @@ const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: Au
     setLoading(true);
     try {
         if (mode === 'login') onSuccess(await login(email, password), mode);
-        else if (mode === 'register') onSuccess(await register(name, email, password), mode);
+        else if (mode === 'register') onSuccess(await register(name, email, password, marketing), mode);
         else if (mode === 'reset') onSuccess(await resetPassword(resetToken || '', password), mode);
         else { await requestPasswordReset(email); setInfo(t.forgot_sent); }
     } catch (err: any) {
@@ -123,6 +128,12 @@ const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: Au
                         </div>
                         {mode !== 'login' && <p className="text-[11px] text-kooq-slate px-1">{t.password_min}</p>}
                     </div>
+                    )}
+                    {mode === 'register' && (
+                        <label className="flex items-start gap-3 text-xs text-kooq-slate px-1 cursor-pointer">
+                            <input id="marketing" type="checkbox" checked={marketing} onChange={e => setMarketingChoice(e.target.checked)} className="mt-0.5 w-4 h-4 accent-kooq-sage" />
+                            <span>{t.marketing_opt_in}</span>
+                        </label>
                     )}
                     {mode === 'login' && <div className="text-right"><button type="button" onClick={() => onSwitch('forgot')} className="text-xs font-sans font-black text-kooq-slate hover:text-kooq-dark">{t.forgot_password}</button></div>}
                     {error && <p role="alert" className="text-sm text-red-600 bg-red-50 rounded-xl px-4 py-3">{error}</p>}
@@ -272,6 +283,17 @@ export default function App() {
   // Rechten: iedereen krijgt elke week automatisch een nieuw weekmenu. Premium/Culinair (ook in de proef)
   // mogen daarnaast 1x per week zelf een nieuw menu laten maken. Het eerste menu (onboarding) mag altijd.
   const isPremiumLike = userStatus === 'premium' || userStatus === 'culinary';
+  const inTrial = userStatus === 'premium' && !!preferences?.trialStartedAt;
+  const trialDaysLeft = inTrial ? Math.max(0, 14 - Math.floor((Date.now() - new Date(preferences!.trialStartedAt!).getTime()) / 864e5)) : 99;
+
+  // Laatste 3 dagen van de proef: één keer per dag laten zien wat je houdt en wat je kwijtraakt.
+  const [showTrialEnding, setShowTrialEnding] = useState(false);
+  useEffect(() => {
+    if (!inTrial || trialDaysLeft > 3 || view !== 'dashboard') return;
+    const today = new Date().toISOString().slice(0, 10);
+    try { if (localStorage.getItem('qook_trial_nudge') === today) return; localStorage.setItem('qook_trial_nudge', today); } catch {}
+    setShowTrialEnding(true);
+  }, [inTrial, trialDaysLeft, view]);
   const canRegenerateNow = () => !plan || (isPremiumLike && usage.fullRegenerations < 1);
 
   /** Nieuwe voorkeuren (instellingen, chat): direct een nieuw menu als dat mag, anders vanaf volgende week. */
@@ -421,6 +443,7 @@ export default function App() {
 
   // Fixed: handleStartCooking was missing, causing reference errors in MealDetail
   const handleStartCooking = (meal: Meal) => {
+    trackMilestone('cooked');
     recordTaste(meal.title, 'cooked');
     setSelectedMeal(meal);
     setView('cooking');
@@ -611,11 +634,12 @@ export default function App() {
             plan={plan} 
             userStatus={userStatus} 
             trialStartedAt={preferences.trialStartedAt}
+            trialStats={account ? getStats() : undefined}
             onUnlock={() => setView('register')} 
             onMealSelect={(m: Meal) => { setSelectedMeal(m); setView('meal-detail'); }} 
             selectedMealIds={selectedMealIds} 
             onToggleShopItem={toggleShopItem} 
-            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
+            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); bumpStat('lists'); if (inTrial && firstTime('qook_moment_first_list')) notify(t.moment_first_list, 'success'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
             onReplaceMeal={async (oldMeal: Meal, dayIndex: number) => { 
                 if (userStatus === 'free' || userStatus === 'basic') {
                     if (usage.replacements >= 3) { 
@@ -681,10 +705,10 @@ export default function App() {
                 </div>
             </div>
         )}
-        {view === 'cooking' && selectedMeal && <CookingMode meal={selectedMeal} onClose={() => setView('dashboard')} language={currentLang} onFeedback={(_id, rating) => recordTaste(selectedMeal.title, rating === 'up' ? 'liked' : 'disliked')} />}
+        {view === 'cooking' && selectedMeal && <CookingMode meal={selectedMeal} onClose={() => setView('dashboard')} language={currentLang} onFeedback={(_id, rating) => { recordTaste(selectedMeal.title, rating === 'up' ? 'liked' : 'disliked'); if (rating === 'up') { trackMilestone('liked'); if (firstTime('qook_moment_liked')) notify(t.moment_liked, 'success'); } }} />}
         {view === 'shopping' && <ShoppingList items={shoppingList} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => { if (i.id !== id) return i; if (isPantryItem(i)) rememberPantry(i.name, !i.checked); return { ...i, checked: !i.checked }; }))} language={currentLang} />}
       </main>
-      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
+      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onToggleMarketing={async (on) => { try { await setMarketing(on); notify(on ? t.marketing_on : t.marketing_off, 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
       <ChatAssistant 
         userPrefs={preferences || {} as any} 
         currentPlan={plan} 
@@ -696,6 +720,8 @@ export default function App() {
         onUnlock={() => setView('register')}
         hasBottomAction={isBottomActionVisible}
       />
+      <TrialEndingModal isOpen={showTrialEnding} daysLeft={trialDaysLeft} stats={getStats()} language={currentLang}
+          onClose={() => setShowTrialEnding(false)} onChoose={() => { setShowTrialEnding(false); setShowPaywall(true); }} />
       <PaywallModal isOpen={showPaywall} onClose={() => setShowPaywall(false)} onUpgrade={(tier) => { 
           // Een abonnement hoort bij een account: eerst inloggen of registreren.
           if (!account) { setShowPaywall(false); setView('register'); return; }

@@ -72,3 +72,14 @@ gesynchroniseerd. Uitloggen wist de gegevens van het apparaat; "Account verwijde
   vul je in bovenaan het script onderaan `index.html` (`BEDRIJF`); lege velden worden niet getoond.
 - `/app/` — de app (`app/index.html`).
 - De app is installeerbaar op het beginscherm (`public/manifest.webmanifest`, `public/sw.js`).
+
+## Proefperiode en e-mails
+
+- Per account worden alleen aantallen bijgehouden (weekmenu's, boodschappenlijsten, hergebruikte
+  ingrediënten, gekookt). De app toont ze in de proefbanner.
+- De geplande taak stuurt tijdens en na de proef e-mails: welkom en "proef stopt morgen" (dienstberichten)
+  altijd; tips, "jouw eerste week", het aanbod en "je zit nu op Gratis" alleen met toestemming
+  (vinkje bij registratie of in Instellingen), met afmeldlink.
+- Dit werkt pas als `RESEND_API_KEY`, `MAIL_FROM` en `APP_URL` (bv. `https://myqook.com`) zijn ingesteld.
+- Het aanbod aan het einde van de proef staat in `worker/engagement.ts` (`TRIAL_OFFER`) en in de
+  app-teksten (`trial_offer`).
