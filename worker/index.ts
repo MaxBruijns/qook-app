@@ -1453,7 +1453,9 @@ function aggregateShopping(recipes: { details: any; factor: number; day?: number
 
 async function shoppingList(env: Env, b: any, _ctx?: Ctx, actor?: Actor) {
   const servings = Math.max(1, Number(b.servings) || 2);
-  const meals = list(b.meals).slice(0, 14);
+  // Gratis en bezoekers: boodschappen alleen voor het open gerecht; de hele week vanaf Basic.
+  const maxMeals = actor && (actor.tier === 'free' || actor.tier === 'visitor') ? 1 : 14;
+  const meals = list(b.meals).slice(0, maxMeals);
   const rows = await Promise.all(meals.map((m: any) => findRecipe(env, m.id, m.title)));
   // Ontbrekende recepten tegelijk laten maken, zodat de lijst altijd klopt.
   const details = await Promise.all(rows.map((row: any, i: number) => (row
