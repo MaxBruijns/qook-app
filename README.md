@@ -1,4 +1,4 @@
-# KOOQ — jouw persoonlijke sous-chef
+# Qook — jouw weekmenu en boodschappen
 
 Alles draait op **Cloudflare**, in één Worker:
 
@@ -64,3 +64,11 @@ gesynchroniseerd. Uitloggen wist de gegevens van het apparaat; "Account verwijde
   de volgende inlog automatisch sterker versleuteld.
 - `RESEND_API_KEY` + `MAIL_FROM` (optioneel): zet je deze (vereist een eigen domein bij Resend), dan
   werkt "Wachtwoord vergeten" via e-mail. Zonder deze instellingen toont de app dat dit nog niet kan.
+
+## Pagina's
+
+- `/` — landingspagina (`index.html`): uitleg, abonnementen, vragen. Terugkerende bezoekers gaan
+  direct door naar de app. Bedrijfsgegevens (naam, KvK, e-mail, links naar privacy en voorwaarden)
+  vul je in bovenaan het script onderaan `index.html` (`BEDRIJF`); lege velden worden niet getoond.
+- `/app/` — de app (`app/index.html`).
+- De app is installeerbaar op het beginscherm (`public/manifest.webmanifest`, `public/sw.js`).

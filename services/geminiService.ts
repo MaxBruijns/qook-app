@@ -1,4 +1,4 @@
-// KOOQ AI-service.
+// Qook AI-service.
 //
 // Dezelfde functies als in het oorspronkelijke AI Studio-ontwerp, zodat de
 // schermen ongewijzigd blijven. Het verschil: alle AI loopt nu via de eigen

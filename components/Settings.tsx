@@ -35,11 +35,11 @@ const REGIONS: { val: Region, label: string }[] = [
 
 const LANGUAGES = [
     { val: 'nl-NL', label: 'Nederlands' },
-    { val: 'en-US', label: 'English' },
-    { val: 'de-DE', label: 'Deutsch' },
-    { val: 'fr-FR', label: 'Français' },
-    { val: 'es-ES', label: 'Español' }
+    { val: 'en-US', label: 'English' }
 ];
+
+/** Diëten waarbij een fout gevaarlijk kan zijn (allergie of intolerantie). */
+const ALLERGY_DIETS = ['Glutenarm', 'Lactosevrij', 'Notenvrij'];
 
 const Section = ({ title, icon: Icon, children, isLocked, handleLockedClick, userStatus }: any) => (
   <section className="space-y-4 pt-8 border-t border-kooq-slate/10 first:pt-0 first:border-0 relative">
@@ -215,6 +215,9 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
                         </button>
                     ))}
                 </div>
+                {(localPrefs.diet || []).some(d => ALLERGY_DIETS.includes(d)) && (
+                    <p className="mt-4 text-[11px] leading-relaxed text-kooq-dark bg-kooq-clementine/10 border border-kooq-clementine/20 rounded-2xl px-4 py-3">{t.allergy_notice}</p>
+                )}
              </Section>
 
              {isPayingMember && (

@@ -371,7 +371,7 @@ async function forgot(req: Request, env: AuthEnv, b: any) {
     const token = randomToken();
     await env.DB.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
       .bind(await sha256Hex(token), user.id, Date.now() + RESET_MINUTES * 60000).run();
-    const link = `${new URL(req.url).origin}/?reset=${token}`;
+    const link = `${new URL(req.url).origin}/app/?reset=${token}`;
     await sendMail(env, email, 'Nieuw wachtwoord voor Qook',
       `Hoi ${user.name || ''},\n\nJe hebt gevraagd om een nieuw wachtwoord voor Qook. Kies een nieuw wachtwoord via deze link ` +
       `(${RESET_MINUTES} minuten geldig):\n\n${link}\n\nHeb je dit niet zelf gevraagd? Dan kun je deze e-mail negeren.\n\nGroet,\nQook`);
