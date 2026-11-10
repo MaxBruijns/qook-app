@@ -22,8 +22,7 @@
     } catch (e) {}
   })();
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,500;9..40,700;9..40,900&family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/api/ext/fonts.css?family=DM+Sans:opsz,wght@9..40,500;9..40,700;9..40,900&family=Inter:wght@400;500;600">
 <style>
 /* Layout: smalle leeskolom; hero naast een echte weekboodschappenlijst; banden over de volle breedte met eigen binnenrand. */
 :root {
@@ -388,6 +387,10 @@ footer .legal { display: flex; flex-wrap: wrap; gap: 6px 18px; }
   </div>
 </footer>
 
+<script>
+  // Bezoek tellen: geen cookie, geen IP-adres; één keer per sessie.
+  try { if (!sessionStorage.getItem('qook_v')) { sessionStorage.setItem('qook_v', '1'); navigator.sendBeacon && navigator.sendBeacon('/api/v', JSON.stringify({ p: 'landing' })); } } catch (e) {}
+</script>
 <script>
   // Bedrijfsgegevens: invullen zodra ze bekend zijn; lege velden worden niet getoond.
   var BEDRIJF = { naam: '', kvk: '', email: '', privacy: '', voorwaarden: '' };

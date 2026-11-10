@@ -83,3 +83,18 @@ gesynchroniseerd. Uitloggen wist de gegevens van het apparaat; "Account verwijde
 - Dit werkt pas als `RESEND_API_KEY`, `MAIL_FROM` en `APP_URL` (bv. `https://myqook.com`) zijn ingesteld.
 - Het aanbod aan het einde van de proef staat in `worker/engagement.ts` (`TRIAL_OFFER`) en in de
   app-teksten (`trial_offer`).
+
+## Betalen (Stripe)
+
+Staat klaar, en gaat aan zodra deze instellingen er zijn (Cloudflare → Worker → Settings → Variables and Secrets):
+
+1. Maak in Stripe vijf prijzen (terugkerend, inclusief btw): Basic €19,99/jaar, Premium €4,99/maand en €39,99/jaar,
+   Culinair €9,99/maand en €69,99/jaar. Zet hun ID's in `STRIPE_PRICE_BASIC_YEAR`, `STRIPE_PRICE_PREMIUM_MONTH`,
+   `STRIPE_PRICE_PREMIUM_YEAR`, `STRIPE_PRICE_CULINARY_MONTH`, `STRIPE_PRICE_CULINARY_YEAR`.
+2. Zet iDEAL (en eventueel kaart, Bancontact) aan bij de betaalmethoden in Stripe.
+3. Klantportaal aanzetten in Stripe (opzeggen, betaalmethode wijzigen, facturen).
+4. Webhook naar `https://<domein>/api/billing/webhook` met de gebeurtenissen `checkout.session.completed` en
+   `customer.subscription.*`. Zet het geheim in `STRIPE_WEBHOOK_SECRET` (secret).
+5. Zet de geheime sleutel in `STRIPE_SECRET_KEY` (secret). Eerst met testsleutels (`sk_test_`) proberen.
+
+Kortingscodes maak je in Stripe aan; ze zijn te gebruiken op de betaalpagina.

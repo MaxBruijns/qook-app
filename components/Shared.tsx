@@ -39,11 +39,13 @@ export const Card: React.FC<{ children: React.ReactNode, className?: string, onC
 export const PaywallModal: React.FC<{ 
     isOpen: boolean; 
     onClose: () => void; 
-    onUpgrade: (mode: SubscriptionStatus) => void; 
+    onUpgrade: (mode: SubscriptionStatus, period: 'month' | 'year') => void; 
     language: string;
     currentStatus: SubscriptionStatus;
 }> = ({ isOpen, onClose, onUpgrade, language, currentStatus }) => {
   const { t } = useTranslation(language);
+  // Per maand of per jaar (Basic is altijd per jaar).
+  const [period, setPeriod] = React.useState<'month' | 'year'>('year');
   if (!isOpen) return null;
 
   return (
@@ -54,6 +56,14 @@ export const PaywallModal: React.FC<{
         <div className="text-center mb-10">
             <h2 className="text-3xl font-black text-kooq-dark mb-2">Kies jouw kook-partner</h2>
             <p className="text-kooq-slate font-medium">Van dagelijks gemak tot gastronomische beleving.</p>
+            <div className="inline-flex mt-6 p-1 rounded-full bg-kooq-white border border-kooq-slate/10" role="group" aria-label="Betaalperiode">
+                {(['month', 'year'] as const).map(p => (
+                    <button key={p} onClick={() => setPeriod(p)} aria-pressed={period === p}
+                        className={`px-5 py-2 rounded-full text-xs font-sans font-black uppercase tracking-widest transition-all ${period === p ? 'bg-kooq-dark text-white' : 'text-kooq-slate'}`}>
+                        {p === 'month' ? 'Per maand' : 'Per jaar (voordeliger)'}
+                    </button>
+                ))}
+            </div>
         </div>
 
         <div className="grid md:grid-cols-3 gap-6">
@@ -72,7 +82,7 @@ export const PaywallModal: React.FC<{
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 3x per week een gerecht vervangen</li>
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 1x per week Koelkast-Magic</li>
                 </ul>
-                <Button onClick={() => onUpgrade('basic')} variant="outline" className="w-full">Start Basic</Button>
+                <Button onClick={() => onUpgrade('basic', 'year')} variant="outline" className="w-full">Start Basic</Button>
             </div>
 
             <div className="border-2 border-kooq-sage rounded-3xl p-6 flex flex-col bg-white shadow-xl relative scale-105 z-10">
@@ -92,7 +102,7 @@ export const PaywallModal: React.FC<{
                     <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Elke week 1x extra weekmenu</li>
                     <li className="flex gap-2 text-xs font-bold text-kooq-dark"><Check size={14} className="text-kooq-sage shrink-0"/> Menu afgestemd op jouw smaak + zero-waste-rapport</li>
                 </ul>
-                <Button onClick={() => onUpgrade('premium')} className="w-full bg-kooq-sage border-none shadow-kooq-sage/20">Start Premium</Button>
+                <Button onClick={() => onUpgrade('premium', period)} className="w-full bg-kooq-sage border-none shadow-kooq-sage/20">Start Premium</Button>
             </div>
 
             <div className="border border-kooq-dark/10 rounded-3xl p-6 flex flex-col bg-kooq-dark text-white shadow-2xl">
@@ -111,7 +121,7 @@ export const PaywallModal: React.FC<{
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-clementine shrink-0"/> Per dag kiezen: culinair of gewoon</li>
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-clementine shrink-0"/> Chef's Plating Tips</li>
                 </ul>
-                <Button onClick={() => onUpgrade('culinary')} className="w-full bg-kooq-clementine border-none shadow-kooq-clementine/20">Start Culinair</Button>
+                <Button onClick={() => onUpgrade('culinary', period)} className="w-full bg-kooq-clementine border-none shadow-kooq-clementine/20">Start Culinair</Button>
             </div>
         </div>
 

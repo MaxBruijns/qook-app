@@ -6,6 +6,7 @@ import { MealPhotoPlaceholder } from './Shared';
 import { Button, Badge, Card } from './Shared';
 import { Clock, Flame, ArrowLeft, Lock, Utensils, Play, Check, Heart, Wine, Plus, Coffee, Sparkles, User, Mail, Key, Users, Zap, Star, Package, Layout, Wrench } from 'lucide-react';
 import { useTranslation } from '../utils/i18n';
+import { notify } from '../utils/notify';
 
 interface Props {
     meal: Meal;
@@ -23,6 +24,47 @@ interface Props {
     selectedMealIds: Set<string>;
     onUnlock: () => void;
 }
+
+/** "Klopt er iets niet?": een recept of foto melden. Bij meerdere meldingen gaat het recept uit de bank. */
+const ReportProblem: React.FC<{ recipeId: string; dark: boolean; t: any }> = ({ recipeId, dark, t }) => {
+    const [open, setOpen] = useState(false);
+    const [kind, setKind] = useState('recept');
+    const [message, setMessage] = useState('');
+    const [sent, setSent] = useState(false);
+    const send = async () => {
+        try {
+            const res = await fetch('/api/report', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recipe_id: recipeId, kind, message }) });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || t.auth_error);
+            setSent(true); setOpen(false); notify(t.report_thanks, 'success');
+        } catch (e: any) { notify(e?.message || t.auth_error, 'error'); }
+    };
+    const muted = dark ? 'text-white/50' : 'text-kooq-slate';
+    if (sent) return <p className={`mt-6 text-xs text-center ${muted}`}>{t.report_thanks}</p>;
+    return (
+        <div className="mt-6 text-center">
+            {!open ? (
+                <button onClick={() => setOpen(true)} className={`text-xs underline underline-offset-4 ${muted}`}>{t.report_problem}</button>
+            ) : (
+                <div className={`text-left rounded-2xl p-4 space-y-3 ${dark ? 'bg-white/5' : 'bg-kooq-white'}`}>
+                    <select id="report-kind" value={kind} onChange={e => setKind(e.target.value)} className="w-full px-3 py-2 rounded-xl text-sm text-kooq-dark">
+                        <option value="recept">{t.report_kind_recipe}</option>
+                        <option value="ingredienten">{t.report_kind_ingredients}</option>
+                        <option value="foto">{t.report_kind_photo}</option>
+                        <option value="allergie">{t.report_kind_allergy}</option>
+                        <option value="anders">{t.report_kind_other}</option>
+                    </select>
+                    <textarea id="report-message" value={message} onChange={e => setMessage(e.target.value)} maxLength={1000} rows={3} placeholder={t.report_placeholder} className="w-full px-3 py-2 rounded-xl text-sm text-kooq-dark" />
+                    <div className="flex gap-2 justify-end">
+                        <button onClick={() => setOpen(false)} className={`text-xs px-3 py-2 ${muted}`}>{t.cancel}</button>
+                        <Button onClick={send} className="text-xs px-4 py-2">{t.report_send}</Button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
 
 export const MealDetail: React.FC<Props> = ({ 
     meal, isPremium, isFreeMeal, userPrefs, onBack, onStartCooking, onShowPaywall, onToggleList, isSelected, onSelectSuggestion, isFavorite, onToggleFavorite, selectedMealIds, onUnlock
@@ -209,6 +251,7 @@ export const MealDetail: React.FC<Props> = ({
                                                 <Play size={24} fill="currentColor"/> {t.start_cooking}
                                             </Button>
                                         </div>
+                                        {fullMeal.id && <ReportProblem recipeId={fullMeal.id} dark={isCulinaryMode} t={t} />}
                                     </section>
                                 </div>
                             </div>

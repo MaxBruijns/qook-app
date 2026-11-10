@@ -13,7 +13,7 @@ import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult, Subs
 import { generateWeeklyPlan, generateShoppingList, analyzeFridgeImage, replaceMeal } from './services/geminiService';
 import { useTranslation, detectUserLocale } from './utils/i18n';
 import { recordTaste } from './utils/tasteProfile';
-import { AccountUser, getAccount, getStats, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword, setMarketing, trackMilestone, bumpStat, mailAvailable, emailShoppingList } from './utils/account';
+import { AccountUser, getAccount, getStats, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword, setMarketing, trackMilestone, bumpStat, mailAvailable, emailShoppingList, billingEnabled, startCheckout, openBillingPortal } from './utils/account';
 import { Calendar, Camera, ArrowRight, User, Mail, Lock, ArrowLeft, Globe, ChevronDown, Check, PartyPopper, Loader2, Info } from 'lucide-react';
 
 function getWeekNumber(d: Date) {
@@ -87,7 +87,7 @@ const AuthView: React.FC<{ mode: AuthMode, resetToken?: string, onSwitch: (m: Au
   return (
     <div className="min-h-screen relative flex flex-col items-center justify-center p-6 bg-kooq-white overflow-hidden">
         <div className="absolute inset-0 z-0 opacity-20">
-            <img src="https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="" />
+            <img src="/api/ext/unsplash/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="" />
         </div>
         <div className="relative z-10 w-full max-w-md space-y-8 animate-in fade-in zoom-in duration-500">
             <button onClick={onBack} className="flex items-center gap-2 text-kooq-slate font-bold mb-4 hover:text-kooq-dark transition-colors"><ArrowLeft size={18}/> {t.cancel}</button>
@@ -168,7 +168,13 @@ export default function App() {
   const [account] = useState<AccountUser | null>(() => getAccount());
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
   const [selectedMealIds, setSelectedMealIds] = useState<Set<string>>(new Set());
-  const [shoppingList, setShoppingList] = useState<ShoppingItem[]>([]);
+  // De boodschappenlijst blijft bewaard (ook zonder internet in de winkel) en gaat mee naar je account.
+  const [shoppingList, setShoppingList] = useState<ShoppingItem[]>(() => {
+    try { return JSON.parse(localStorage.getItem('qook_shopping_list') || '[]'); } catch { return []; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('qook_shopping_list', JSON.stringify(shoppingList)); } catch {}
+  }, [shoppingList]);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   // Favoriete gerechten zelf bewaren, zodat ze ook na een nieuw weekmenu blijven bestaan.
   const [favoriteMeals, setFavoriteMeals] = useState<Meal[]>(() => {
@@ -290,6 +296,27 @@ export default function App() {
   const [showTrialEnding, setShowTrialEnding] = useState(false);
   // Kan de lijst gemaild worden? (account + e-mail ingesteld op de server)
   const [canMail, setCanMail] = useState(false);
+  // Betalen via Stripe (zodra het aan staat); terug van de betaalpagina: /app/?betaald=1
+  const [canPay, setCanPay] = useState(false);
+  useEffect(() => { billingEnabled().then(setCanPay); }, []);
+  useEffect(() => {
+    const paid = new URLSearchParams(window.location.search).get('betaald');
+    if (paid === null) return;
+    window.history.replaceState(null, '', '/app/');
+    if (paid === '1') {
+      notify(t.payment_done, 'success');
+      // Stripe meldt de betaling binnen een paar seconden; daarna de app opnieuw laden met het nieuwe abonnement.
+      setTimeout(() => window.location.replace('/app/'), 4000);
+    } else notify(t.payment_cancelled);
+  }, []);
+
+  // Terug uit de bevestigingsmail: /app/?verified=1
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get('verified');
+    if (v === null) return;
+    notify(v === '1' ? t.verify_done : t.verify_expired, v === '1' ? 'success' : 'error');
+    window.history.replaceState(null, '', '/app/');
+  }, []);
   useEffect(() => { if (account) mailAvailable().then(setCanMail); }, [account]);
   useEffect(() => {
     if (!inTrial || trialDaysLeft > 3 || view !== 'dashboard') return;
@@ -301,6 +328,13 @@ export default function App() {
 
   /** Nieuwe voorkeuren (instellingen, chat): direct een nieuw menu als dat mag, anders vanaf volgende week. */
   const applyPrefs = (p: UserPreferences, regen = true) => {
+    // Allergie-diëten (gezondheidsgegeven) alleen met toestemming; die geef je in Instellingen.
+    const ALLERGY = ['Glutenarm', 'Lactosevrij', 'Notenvrij'];
+    if (!p.allergyConsent && (p.diet || []).some(d => ALLERGY.includes(d))) {
+      p = { ...p, diet: (p.diet || []).filter(d => !ALLERGY.includes(d)) };
+      if (!p.diet.length) p.diet = ['Geen'];
+      notify(t.allergy_consent_needed);
+    }
     setPreferences(p);
     localStorage.setItem('qook_prefs', JSON.stringify(p));
     if (!regen) return;
@@ -489,7 +523,7 @@ export default function App() {
     return (
       <div className="min-h-screen relative flex flex-col items-center justify-center p-6 text-center overflow-hidden">
         <div className="absolute inset-0 z-0">
-            <img src="https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="" />
+            <img src="/api/ext/unsplash/photo-1556910103-1c02745aae4d?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover" alt="" />
             <div className="absolute inset-0 bg-kooq-white/75 backdrop-blur-sm"></div>
         </div>
         <div className="relative z-10">
@@ -537,7 +571,7 @@ export default function App() {
         </div>
 
         <div className="absolute inset-0 z-0 transition-opacity duration-1000">
-            <img src="https://images.unsplash.com/photo-1543353071-873f17a7a088?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover scale-105 opacity-85" alt="Welcome Background" />
+            <img src="/api/ext/unsplash/photo-1543353071-873f17a7a088?q=80&w=2070&auto=format&fit=crop" className="w-full h-full object-cover scale-105 opacity-85" alt="Welcome Background" />
             <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-white/40 backdrop-blur-[0.5px]"></div>
         </div>
         <div className="relative z-10 max-w-lg w-full space-y-12">
@@ -642,7 +676,7 @@ export default function App() {
             onMealSelect={(m: Meal) => { setSelectedMeal(m); setView('meal-detail'); }} 
             selectedMealIds={selectedMealIds} 
             onToggleShopItem={toggleShopItem} 
-            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); bumpStat('lists'); if (inTrial && firstTime('qook_moment_first_list')) notify(t.moment_first_list, 'success'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
+            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.map((m, i) => ({ ...m, dayIndex: i })).filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); bumpStat('lists'); if (inTrial && firstTime('qook_moment_first_list')) notify(t.moment_first_list, 'success'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
             onReplaceMeal={async (oldMeal: Meal, dayIndex: number) => { 
                 if (userStatus === 'free' || userStatus === 'basic') {
                     if (usage.replacements >= 3) { 
@@ -713,7 +747,7 @@ export default function App() {
             subtitle={preferences ? t.shop_subtitle.replace('{n}', String(selectedMealIds.size)).replace('{p}', String((preferences.adultsCount ?? 2) + (preferences.childrenCount ?? 0))) : undefined}
             onEmail={account && canMail ? async (sections) => { try { const r = await emailShoppingList(sections); notify(t.email_sent.replace('{email}', r.to), 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } } : undefined} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => { if (i.id !== id) return i; if (isPantryItem(i)) rememberPantry(i.name, !i.checked); return { ...i, checked: !i.checked }; }))} language={currentLang} />}
       </main>
-      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onToggleMarketing={async (on) => { try { await setMarketing(on); notify(on ? t.marketing_on : t.marketing_off, 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
+      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onManageBilling={account?.billing && canPay ? () => openBillingPortal().catch(e => notify(e?.message || t.auth_error, 'error')) : undefined} onToggleMarketing={async (on) => { try { await setMarketing(on); notify(on ? t.marketing_on : t.marketing_off, 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
       <ChatAssistant 
         userPrefs={preferences || {} as any} 
         currentPlan={plan} 
@@ -727,9 +761,10 @@ export default function App() {
       />
       <TrialEndingModal isOpen={showTrialEnding} daysLeft={trialDaysLeft} stats={getStats()} language={currentLang}
           onClose={() => setShowTrialEnding(false)} onChoose={() => { setShowTrialEnding(false); setShowPaywall(true); }} />
-      <PaywallModal isOpen={showPaywall} onClose={() => setShowPaywall(false)} onUpgrade={(tier) => { 
+      <PaywallModal isOpen={showPaywall} onClose={() => setShowPaywall(false)} onUpgrade={(tier, period) => { 
           // Een abonnement hoort bij een account: eerst inloggen of registreren.
           if (!account) { setShowPaywall(false); setView('register'); return; }
+          if (canPay) { startCheckout(tier, period).catch(e => notify(e?.message || t.auth_error, 'error')); return; }
           setUserStatus(tier); 
           saveSubscription(tier);
           if (preferences) { 

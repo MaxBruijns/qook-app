@@ -11,13 +11,15 @@ export interface AccountUser {
   subscription: 'free' | 'basic' | 'premium' | 'culinary';
   trial_started_at: string | null;
   marketing?: boolean;
+  verified?: boolean;
+  billing?: boolean;   // heeft een Stripe-klantaccount (abonnement beheren)
 }
 
 /** Wat iemand al met Qook gedaan heeft (aantallen), voor de proefbanner. */
 export type AccountStats = Partial<Record<'plans' | 'lists' | 'recipes' | 'replaced' | 'scans' | 'cooked' | 'liked' | 'reused', number>>;
 
 export const SYNC_KEYS = ['qook_prefs', 'qook_current_plan', 'qook_favorites', 'qook_favorite_meals', 'qook_usage',
-  'qook_taste', 'qook_meal_history', 'qook_pantry_have', 'qook_shop_order'];
+  'qook_taste', 'qook_meal_history', 'qook_pantry_have', 'qook_shop_order', 'qook_shopping_list'];
 const ACCOUNT_KEY = 'qook_account';     // laatst bekende gebruiker (voor als het netwerk even weg is)
 const STAMPS_KEY = 'qook_sync_stamps';  // per sleutel: versie die dit apparaat heeft
 const DEBOUNCE_MS = 2000;
@@ -256,3 +258,41 @@ export const mailAvailable = async () => {
 /** Boodschappenlijst naar het e-mailadres van het account. */
 export const emailShoppingList = (sections: { title: string; items: { name: string; amount: string; checked?: boolean }[] }[]) =>
   api('/account/email-list', 'POST', { sections });
+
+/** Wachtwoord wijzigen; andere apparaten worden uitgelogd. */
+export const changePassword = (current: string, password: string) => api('/account/password', 'POST', { current, password });
+
+/** Bevestigingsmail opnieuw sturen. */
+export const resendVerification = () => api('/account/verify-email', 'POST', {});
+
+/** Alles wat Qook over je bewaart, als bestand (inzagerecht). */
+export const downloadMyData = async () => {
+  const res = await fetch('/api/account/export', { credentials: 'same-origin' });
+  if (!res.ok) throw new Error('Downloaden lukte niet.');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `qook-gegevens-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+};
+
+/** Staat betalen via Stripe aan? */
+export const billingEnabled = async () => {
+  try { return !!(await api('/billing/config')).enabled; } catch { return false; }
+};
+
+/** Naar de betaalpagina van Stripe. */
+export const startCheckout = async (tier: string, period: 'month' | 'year') => {
+  const plan = tier === 'basic' ? 'basic_year' : `${tier}_${period}`;
+  const { url } = await api('/billing/checkout', 'POST', { plan });
+  await flush().catch(() => {});
+  window.location.href = url;
+};
+
+/** Stripe-klantportaal: opzeggen, betaalmethode, facturen. */
+export const openBillingPortal = async () => {
+  const { url } = await api('/billing/portal', 'POST', {});
+  window.location.href = url;
+};

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Qook beheer</title>
+<style>
+:root { --bg: #F5F7F4; --paper: #fff; --ink: #2A3338; --muted: #5D6E76; --sage: #94B79D; --sage-deep: #5E8A69; --line: #DCE3DD; --warn: #C2410C; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px max(16px, env(safe-area-inset-left, 0px)) 64px; display: grid; gap: 24px; }
+h1 { font-size: 1.5rem; margin: 0; } h2 { font-size: 1rem; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--sage-deep); }
+.panel { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; padding: 20px; min-width: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat b { display: block; font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.stat span { color: var(--muted); font-size: .85rem; }
+.bars { display: grid; gap: 6px; }
+.bar { display: grid; grid-template-columns: 90px 1fr 60px; gap: 10px; align-items: center; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.bar i { display: block; height: 10px; border-radius: 5px; background: var(--sage); }
+.bar i.app { background: var(--ink); }
+.table { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+button { font: inherit; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; padding: 4px 8px; cursor: pointer; margin: 2px; }
+button:hover { border-color: var(--sage); }
+.pill { font-size: .75rem; padding: 2px 8px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); white-space: nowrap; }
+.pill.open { border-color: var(--warn); color: var(--warn); }
+form { display: flex; gap: 8px; flex-wrap: wrap; }
+input { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); min-width: 0; flex: 1; }
+.muted { color: var(--muted); font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Qook beheer</h1>
+  <form id="login" class="panel">
+    <input id="key" type="password" placeholder="Beheersleutel (ADMIN_KEY)" autocomplete="off" />
+    <button type="submit">Openen</button>
+  </form>
+  <div id="content" hidden></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let key = '';
+try { key = sessionStorage.getItem('qook_admin') || ''; } catch {}
+
+async function api(path, body) {
+  const res = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'x-admin-key': key, 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined });
+  if (!res.ok) throw new Error(res.status === 404 ? 'Sleutel klopt niet' : 'Fout ' + res.status);
+  return res.json();
+}
+
+function stat(label, value) { return `<div class="stat"><b>${value}</b><span>${label}</span></div>`; }
+
+async function load() {
+  const d = await api('/api/admin/overview');
+  $('#login').hidden = true;
+  const u = d.users, a = d.activity, b = d.bank;
+  const paid = u.basic + u.premium + u.culinary;
+  const ended = u.trial_ended_unpaid + paid;
+  const days = {};
+  for (const v of d.visits) (days[v.day] ||= {})[v.page] = v.count;
+  const max = Math.max(1, ...Object.values(days).map(x => (x.landing || 0) + (x.app || 0)));
+  $('#content').innerHTML = `
+    <section class="panel"><h2>Accounts</h2><div class="grid">
+      ${stat('accounts', u.total)}${stat('nieuw (7 dagen)', u.new_7d)}${stat('nieuw (30 dagen)', u.new_30d)}
+      ${stat('in proef', u.trial_active)}${stat('betalend', paid)}
+      ${stat('omzetting na proef', ended ? Math.round(paid / ended * 100) + '%' : '–')}
+      ${stat('Basic / Premium / Culinair', `${u.basic} / ${u.premium} / ${u.culinary}`)}
+      ${stat('tips per e-mail', u.marketing_opt_in)}${stat('e-mail bevestigd', u.verified)}
+    </div></section>
+    <section class="panel"><h2>Gebruik</h2><div class="grid">
+      ${stat('actief (7 dagen)', a.active_7d)}${stat("weekmenu's", a.plans_total)}${stat('boodschappenlijsten', a.lists_total)}
+    </div></section>
+    <section class="panel"><h2>Bezoek (14 dagen)</h2><div class="bars">
+      ${Object.keys(days).sort().map(day => { const x = days[day]; const l = x.landing || 0, p = x.app || 0;
+        return `<div class="bar"><span>${day.slice(5)}</span><span style="display:flex;gap:2px"><i style="width:${l / max * 100}%"></i><i class="app" style="width:${p / max * 100}%"></i></span><span>${l} · ${p}</span></div>`; }).join('') || '<p class="muted">Nog geen bezoek geteld.</p>'}
+      <p class="muted">Groen: voorpagina, donker: app. Zonder cookies, zonder IP-adressen.</p>
+    </div></section>
+    <section class="panel"><h2>Receptenbank</h2><div class="grid">
+      ${stat('gerechten', b.total)}${stat('met recept', b.with_recipe)}${stat('met foto', b.with_photo)}${stat('uit de bank (gemeld)', b.hidden)}
+    </div></section>
+    <section class="panel"><h2>Meldingen</h2><div class="table"><table>
+      <tr><th>Gerecht</th><th>Soort</th><th>Toelichting</th><th>Status</th><th>Actie</th></tr>
+      ${d.reports.map(r => `<tr>
+        <td>${esc(r.title)}${r.hidden ? ' <span class="pill">uit de bank</span>' : ''}<div class="muted">${new Date(r.created_at).toLocaleString('nl-NL')}</div></td>
+        <td>${esc(r.kind)}</td><td>${esc(r.message) || '<span class="muted">–</span>'}</td>
+        <td><span class="pill ${r.status === 'open' ? 'open' : ''}">${esc(r.status)}</span></td>
+        <td>
+          <button data-a="resolve" data-id="${esc(r.recipe_id)}">Opgelost</button>
+          <button data-a="${r.hidden ? 'unhide' : 'hide'}" data-id="${esc(r.recipe_id)}">${r.hidden ? 'Terug in bank' : 'Uit bank'}</button>
+          <button data-a="new_photo" data-id="${esc(r.recipe_id)}">Nieuwe foto</button>
+          <button data-a="new_recipe" data-id="${esc(r.recipe_id)}">Recept opnieuw</button>
+        </td></tr>`).join('') || '<tr><td colspan="5" class="muted">Geen meldingen.</td></tr>'}
+    </table></div></section>
+    <p class="muted">Bijgewerkt: ${new Date(d.generated_at).toLocaleString('nl-NL')}</p>`;
+  $('#content').hidden = false;
+}
+
+$('#content').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-a]');
+  if (!btn) return;
+  btn.disabled = true;
+  try { await api('/api/admin/action', { action: btn.dataset.a, recipe_id: btn.dataset.id }); await load(); }
+  catch (err) { btn.disabled = false; btn.textContent = err.message; }
+});
+
+$('#login').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  key = $('#key').value.trim();
+  try { await load(); try { sessionStorage.setItem('qook_admin', key); } catch {} }
+  catch (err) { $('#key').value = ''; $('#key').placeholder = err.message; }
+});
+
+if (key) load().catch(() => { $('#login').hidden = false; });
+</script>
+</body>
+</html>

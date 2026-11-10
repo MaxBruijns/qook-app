@@ -106,7 +106,12 @@ export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, la
                              {grouped[cat].map(item => (
                                  <div key={item.id} onClick={() => onToggleItem(item.id)} className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${item.checked ? 'bg-kooq-white border-transparent opacity-50' : 'bg-white border-kooq-slate/10'}`}>
                                      <div className={`mt-1 w-5 h-5 rounded-md border flex items-center justify-center ${item.checked ? 'bg-kooq-sage border-kooq-sage text-white' : 'border-kooq-slate/30'}`}>{item.checked && <Check size={14} />}</div>
-                                     <div className="flex-1 min-w-0 font-medium">{item.name}</div>
+                                     <div className="flex-1 min-w-0">
+                                         <div className="font-medium">{item.name}</div>
+                                         {item.used_in && item.used_in.length > 1 && (
+                                             <div className="text-[11px] text-kooq-sage font-semibold">{t.used_in_days.replace('{days}', item.used_in.map(d => t[`day_short_${d}`] || d + 1).join(' · '))}</div>
+                                         )}
+                                     </div>
                                      <span className="text-sm font-semibold text-kooq-slate whitespace-nowrap">{formatAmount(item, language)}</span>
                                  </div>
                              ))}

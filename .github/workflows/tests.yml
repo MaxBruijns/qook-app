@@ -1,4 +1,4 @@
-# Bij elke wijziging (push en pull request) controleren dat de site en de app bouwen.
+# Bij elke wijziging (push en pull request) alle tests draaien en de site bouwen.
 name: Tests
 on:
   push:
@@ -14,4 +14,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm test
+      # Controleer dat de site en de app echt bouwen (zelfde opdracht als Cloudflare).
       - run: npm run build
+      - run: test -f dist/index.html && test -f dist/app/index.html && test -f dist/sw.js && test -f dist/beheer/index.html

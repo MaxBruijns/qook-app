@@ -27,5 +27,5 @@ dist-ssr
 .wrangler
 .dev.vars
 
-# Tijdelijke testbestanden
-tests/.build
+# Testbestanden (gegenereerd)
+tests/.build/
