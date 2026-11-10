@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
 import { ShoppingItem } from '../types';
-import { X, Check, MessageSquare, ChevronUp, ChevronDown, ArrowUpDown } from 'lucide-react';
+import { X, Check, MessageSquare, ChevronUp, ChevronDown, ArrowUpDown, FileDown, Mail, Loader2 } from 'lucide-react';
+import { shoppingListPdf, downloadPdf, PdfSection } from '../utils/shoppingPdf';
 import { Button } from './Shared';
 import { useTranslation } from '../utils/i18n';
 
@@ -10,6 +11,9 @@ interface Props {
   onClose: () => void;
   onToggleItem: (id: string) => void;
   language: string;
+  /** Alleen als er een account is en de server kan mailen. */
+  onEmail?: (sections: PdfSection[]) => Promise<void>;
+  subtitle?: string;
 }
 
 // Volgorde van de afdelingen in jouw eigen supermarkt (onthouden op dit apparaat).
@@ -30,7 +34,7 @@ const formatAmount = (item: ShoppingItem, language: string) => {
   return `${n.toLocaleString(language || 'nl-NL', { maximumFractionDigits: 1 })} ${item.unit || ''}`.trim();
 };
 
-export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, language }) => {
+export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, language, onEmail, subtitle }) => {
   const { t } = useTranslation(language);
   const grouped = items.reduce((acc, item) => { if (!acc[item.category]) acc[item.category] = []; acc[item.category].push(item); return acc; }, {} as Record<string, ShoppingItem[]>);
   const [order, setOrder] = useState<string[]>(loadOrder);
@@ -47,6 +51,22 @@ export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, la
     const next = [...visible, ...rest];
     setOrder(next);
     saveOrder(next);
+  };
+
+  // Dezelfde lijst, in de winkelvolgorde, voor PDF en e-mail.
+  const sections = (): PdfSection[] => categories.map(cat => ({
+    title: cat, items: grouped[cat].map(i => ({ name: i.name, amount: formatAmount(i, language), checked: i.checked })),
+  }));
+  const [mailing, setMailing] = useState(false);
+  const handlePdf = () => {
+    const date = new Date().toLocaleDateString(language || 'nl-NL', { day: 'numeric', month: 'long', year: 'numeric' });
+    downloadPdf(shoppingListPdf(t.shopping_list, `Qook · ${date}${subtitle ? ` · ${subtitle}` : ''}`, sections()),
+      `qook-boodschappen-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+  const handleEmail = async () => {
+    if (!onEmail) return;
+    setMailing(true);
+    try { await onEmail(sections()); } finally { setMailing(false); }
   };
 
   const handleShare = () => {
@@ -98,6 +118,12 @@ export const ShoppingList: React.FC<Props> = ({ items, onClose, onToggleItem, la
       </div>
       <div className="p-4 border-t border-kooq-slate/10 bg-white space-y-3">
           <Button onClick={handleShare} className="w-full max-w-md mx-auto bg-kooq-dark text-white border-none shadow-xl"><MessageSquare size={18}/> {t.share_list}</Button>
+          {items.length > 0 && (
+            <div className="flex gap-3 w-full max-w-md mx-auto">
+              <Button onClick={handlePdf} variant="secondary" className="flex-1"><FileDown size={18}/> {t.download_pdf}</Button>
+              {onEmail && <Button onClick={handleEmail} disabled={mailing} variant="secondary" className="flex-1">{mailing ? <Loader2 size={18} className="animate-spin" /> : <Mail size={18}/>} {t.email_me}</Button>}
+            </div>
+          )}
           <Button onClick={onClose} variant="secondary" className="w-full max-w-md mx-auto">{t.done}</Button>
       </div>
     </div>

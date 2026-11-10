@@ -13,7 +13,7 @@ import { UserPreferences, WeeklyPlan, Meal, ShoppingItem, FridgeScanResult, Subs
 import { generateWeeklyPlan, generateShoppingList, analyzeFridgeImage, replaceMeal } from './services/geminiService';
 import { useTranslation, detectUserLocale } from './utils/i18n';
 import { recordTaste } from './utils/tasteProfile';
-import { AccountUser, getAccount, getStats, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword, setMarketing, trackMilestone, bumpStat } from './utils/account';
+import { AccountUser, getAccount, getStats, login, register, logout, deleteAccount, resetAccountData, saveSubscription, passwordResetAvailable, requestPasswordReset, resetPassword, setMarketing, trackMilestone, bumpStat, mailAvailable, emailShoppingList } from './utils/account';
 import { Calendar, Camera, ArrowRight, User, Mail, Lock, ArrowLeft, Globe, ChevronDown, Check, PartyPopper, Loader2, Info } from 'lucide-react';
 
 function getWeekNumber(d: Date) {
@@ -288,6 +288,9 @@ export default function App() {
 
   // Laatste 3 dagen van de proef: één keer per dag laten zien wat je houdt en wat je kwijtraakt.
   const [showTrialEnding, setShowTrialEnding] = useState(false);
+  // Kan de lijst gemaild worden? (account + e-mail ingesteld op de server)
+  const [canMail, setCanMail] = useState(false);
+  useEffect(() => { if (account) mailAvailable().then(setCanMail); }, [account]);
   useEffect(() => {
     if (!inTrial || trialDaysLeft > 3 || view !== 'dashboard') return;
     const today = new Date().toISOString().slice(0, 10);
@@ -706,7 +709,9 @@ export default function App() {
             </div>
         )}
         {view === 'cooking' && selectedMeal && <CookingMode meal={selectedMeal} onClose={() => setView('dashboard')} language={currentLang} onFeedback={(_id, rating) => { recordTaste(selectedMeal.title, rating === 'up' ? 'liked' : 'disliked'); if (rating === 'up') { trackMilestone('liked'); if (firstTime('qook_moment_liked')) notify(t.moment_liked, 'success'); } }} />}
-        {view === 'shopping' && <ShoppingList items={shoppingList} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => { if (i.id !== id) return i; if (isPantryItem(i)) rememberPantry(i.name, !i.checked); return { ...i, checked: !i.checked }; }))} language={currentLang} />}
+        {view === 'shopping' && <ShoppingList items={shoppingList}
+            subtitle={preferences ? t.shop_subtitle.replace('{n}', String(selectedMealIds.size)).replace('{p}', String((preferences.adultsCount ?? 2) + (preferences.childrenCount ?? 0))) : undefined}
+            onEmail={account && canMail ? async (sections) => { try { const r = await emailShoppingList(sections); notify(t.email_sent.replace('{email}', r.to), 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } } : undefined} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => { if (i.id !== id) return i; if (isPantryItem(i)) rememberPantry(i.name, !i.checked); return { ...i, checked: !i.checked }; }))} language={currentLang} />}
       </main>
       {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onToggleMarketing={async (on) => { try { await setMarketing(on); notify(on ? t.marketing_on : t.marketing_off, 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
       <ChatAssistant 
