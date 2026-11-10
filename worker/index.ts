@@ -26,7 +26,7 @@
 import { handleAuth, currentUser, tierOf } from './auth';
 import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
 import { recordMilestone, countReused, runTrialMails, unsubscribe, cleanupInactiveAccounts, Milestone } from './engagement';
-import { handleAdmin, reportRecipe, countVisit, dailyAdminTasks } from './admin';
+import { handleAdmin, reportRecipe, countVisit, dailyAdminTasks, tally } from './admin';
 import { handleBilling } from './billing';
 import { handleExternal } from './external';
 
@@ -1729,6 +1729,7 @@ export default {
         if (action) await checkLimit(env.DB, actor, action);
         const result = await handler(env, body, ctx, actor);
         if (action) await countUse(env.DB, actor, action);
+        if (path === '/api/fridge-scan') await tally(env as any, actor.tier === 'visitor' ? 'scan_bezoeker' : 'scan_lid').catch(() => {});
         const milestone = MILESTONE_ROUTES[path];
         if (milestone) await recordMilestone(env.DB, actor.who, milestone).catch(e => console.warn('Mijlpaal mislukt', errMsg(e)));
         return json(result);

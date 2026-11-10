@@ -23,6 +23,7 @@ interface Props {
     onToggleFavorite: () => void;
     selectedMealIds: Set<string>;
     onUnlock: () => void;
+    lockedFromScan?: boolean;
 }
 
 /** "Klopt er iets niet?": een recept of foto melden. Bij meerdere meldingen gaat het recept uit de bank. */
@@ -67,7 +68,7 @@ const ReportProblem: React.FC<{ recipeId: string; dark: boolean; t: any }> = ({ 
 };
 
 export const MealDetail: React.FC<Props> = ({ 
-    meal, isPremium, isFreeMeal, userPrefs, onBack, onStartCooking, onShowPaywall, onToggleList, isSelected, onSelectSuggestion, isFavorite, onToggleFavorite, selectedMealIds, onUnlock
+    meal, isPremium, isFreeMeal, userPrefs, onBack, onStartCooking, onShowPaywall, onToggleList, isSelected, onSelectSuggestion, isFavorite, onToggleFavorite, selectedMealIds, onUnlock, lockedFromScan
 }) => {
     const { t } = useTranslation(userPrefs.language || 'nl-NL');
     const [fullMeal, setFullMeal] = useState<Meal>(meal);
@@ -177,9 +178,9 @@ export const MealDetail: React.FC<Props> = ({
                     <div className={`${isCulinaryMode ? 'bg-white/5 border-white/10' : 'bg-kooq-dark'} p-8 rounded-[2.5rem] text-white text-center space-y-6 animate-in slide-in-from-bottom-4 shadow-2xl border`}>
                         <div className="w-16 h-16 bg-kooq-sage rounded-2xl flex items-center justify-center mx-auto shadow-lg"><Lock size={32} /></div>
                         <div>
-                            <h2 className="text-2xl font-sans font-black mb-2 tracking-tighter">{t.unlock_now}</h2>
-                            <p className="text-white/60 font-medium max-w-sm mx-auto mb-8">{t.premium_desc}</p>
-                            <Button onClick={onUnlock} className="bg-kooq-sage border-none w-full max-w-sm mx-auto py-6 text-xl">{t.register_btn} & {t.unlock_now}</Button>
+                            <h2 className="text-2xl font-sans font-black mb-2 tracking-tighter">{lockedFromScan ? t.scan_locked_title : t.unlock_now}</h2>
+                            <p className="text-white/60 font-medium max-w-sm mx-auto mb-8">{lockedFromScan ? t.scan_locked_desc : t.premium_desc}</p>
+                            <Button onClick={onUnlock} className="bg-kooq-sage border-none w-full max-w-sm mx-auto py-6 text-xl">{lockedFromScan ? t.scan_banner_btn : `${t.register_btn} & ${t.unlock_now}`}</Button>
                         </div>
                     </div>
                 ) : (

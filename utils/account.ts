@@ -175,8 +175,8 @@ export const login = async (email: string, password: string) => {
   return user as AccountUser;
 };
 
-export const register = async (name: string, email: string, password: string, marketing = false) => {
-  const { user, data, stats: st } = await api('/auth/register', 'POST', { name, email, password, marketing, data: collectLocalData() });
+export const register = async (name: string, email: string, password: string, marketing = false, source?: string) => {
+  const { user, data, stats: st } = await api('/auth/register', 'POST', { name, email, password, marketing, source, data: collectLocalData() });
   setStats(st);
   applyServerData(data, true);
   applyUser(user);

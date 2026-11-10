@@ -108,6 +108,13 @@ function viewOverview() {
       ${stat('accounts', u.total)}${stat('nieuw (7 dagen)', u.new_7d)}${stat('actief (7 dagen)', a.active_7d)}
       ${stat("weekmenu's", a.plans_total)}${stat('boodschappenlijsten', a.lists_total)}
     </div></section>
+    ${data.scan ? `<section class="panel"><h2>Koelkastscan als ingang</h2><div class="grid">
+      ${stat('scans door bezoekers (30 d)', data.scan.visitor_scans_30d)}
+      ${stat('registraties na scan (30 d)', data.scan.signups_30d)}
+      ${stat('scanners die registreren', data.scan.visitor_scans_30d ? Math.round(data.scan.signups_30d / data.scan.visitor_scans_30d * 100) + '%' : '–')}
+      ${stat('via scan, nu betalend', `${data.scan.paying_total} van ${data.scan.signups_total}`)}
+      ${stat('scans door leden (30 d)', data.scan.member_scans_30d)}
+    </div><p class="muted">Een bezoeker mag 1 scan per week. Volledige recepten na een gratis account.</p></section>` : ''}
     <section class="panel"><h2>Bezoek (14 dagen)</h2><div class="bars">
       ${Object.keys(days).sort().map(day => { const x = days[day], l = x.landing || 0, p = x.app || 0;
         return `<div class="bar"><span>${day.slice(8)}-${day.slice(5, 7)}</span><span class="track"><i style="width:${l / max * 100}%"></i><i class="dark" style="width:${p / max * 100}%"></i></span><span>${l} voorpag. · ${p} app</span></div>`; }).join('') || '<p class="muted">Nog geen bezoek geteld.</p>'}

@@ -282,6 +282,8 @@ async function saveData(env: AuthEnv, userId: string, items: any) {
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
+const SIGNUP_SOURCES = ['scan', 'weekmenu', 'recept', 'chat'];
+
 async function register(req: Request, env: AuthEnv, b: any) {
   const ip = clientIp(req);
   if (await tooMany(env, `reg:${ip}`, 10)) throw new AuthError(429, 'Te veel nieuwe accounts vanaf dit adres. Probeer het later opnieuw.');
@@ -309,7 +311,12 @@ async function register(req: Request, env: AuthEnv, b: any) {
   // E-mailadres bevestigen (als e-mail is ingesteld). Mislukt het versturen, dan kan het later opnieuw.
   if (mailReady(env)) await sendVerification(req, env, { id, email, name }).catch(e => console.warn('Bevestigingsmail mislukt', e?.message));
   const marketing = b.marketing === true;
-  if (marketing) await env.DB.prepare('UPDATE users SET marketing_opt_in = 1 WHERE id = ?').bind(id).run();
+  // Waar de registratie vandaan kwam (bijv. na een gratis koelkastscan), voor het beheerscherm.
+  const source = SIGNUP_SOURCES.includes(b.source) ? b.source : null;
+  if (marketing || source) {
+    await ensureEngagementSchema(env.DB);
+    await env.DB.prepare('UPDATE users SET marketing_opt_in = ?, signup_source = ? WHERE id = ?').bind(marketing ? 1 : 0, source, id).run();
+  }
   const user = { id, email, name, subscription: 'trial', trial_started_at: trial, marketing_opt_in: marketing ? 1 : 0 };
   return json({ user: publicUser(user), data: await loadData(env, id), stats: await loadStats(env.DB, id) }, 201,
     { 'set-cookie': await createSession(env, id) });
