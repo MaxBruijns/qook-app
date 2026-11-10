@@ -78,6 +78,8 @@ export const PaywallModal: React.FC<{
                     </div>
                 </div>
                 <ul className="space-y-3 mb-8 flex-1">
+                    <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> Alle 7 recepten volledig</li>
+                    <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> Weekboodschappen op één lijst</li>
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 52 weken gebalanceerd menu</li>
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 3x per week een gerecht vervangen</li>
                     <li className="flex gap-2 text-xs font-medium"><Check size={14} className="text-kooq-sage shrink-0"/> 1x per week Koelkast-Magic</li>

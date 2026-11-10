@@ -39,6 +39,10 @@ const firstTime = (key: string) => {
     try { if (localStorage.getItem(key)) return false; localStorage.setItem(key, '1'); return true; } catch { return false; }
 };
 const allMealIds = (p: WeeklyPlan | null) => new Set((p?.days || []).map(m => m.id));
+// Welke gerechten op de boodschappenlijst mogen: bij Gratis alleen het open gerecht (dag 1),
+// vanaf Basic en tijdens de proef de hele week.
+const listableIds = (p: WeeklyPlan | null, status?: string) =>
+  status === 'free' || !status ? new Set(p?.days[0] ? [p.days[0].id] : []) : allMealIds(p);
 
 const stripImages = (p: WeeklyPlan): WeeklyPlan => ({
     ...p,
@@ -248,7 +252,7 @@ export default function App() {
         if (savedPlan) {
             const parsedPlan: WeeklyPlan = JSON.parse(savedPlan);
             setPlan(parsedPlan);
-            setSelectedMealIds(allMealIds(parsedPlan)); // standaard de hele week: één keer boodschappen
+            setSelectedMealIds(listableIds(parsedPlan, p.subscriptionStatus || 'free')); // standaard alles wat mag: één keer boodschappen
             
             // Check for 7-day auto-refresh
             if (parsedPlan.generatedAt) {
@@ -375,7 +379,7 @@ export default function App() {
 
         const p = await generateWeeklyPlan(activePrefs, favTitles);
         setPlan(p);
-        setSelectedMealIds(allMealIds(p)); // standaard de hele week: één keer boodschappen
+        setSelectedMealIds(listableIds(p, userStatus)); // standaard alles wat mag: één keer boodschappen
         localStorage.setItem('qook_current_plan', JSON.stringify(stripImages(p)));
         
         // Update generation history with the 7 new meal titles
@@ -471,7 +475,16 @@ export default function App() {
   };
 
   // Gerecht op de boodschappenlijst zetten of eraf halen (en onthouden als smaaksignaal).
+  // Wordt iemand gratis (proef voorbij) of verandert het menu: alleen toegestane gerechten blijven geselecteerd.
+  useEffect(() => {
+      if (userStatus !== 'free' || !plan) return;
+      const allowed = listableIds(plan, 'free');
+      setSelectedMealIds(prev => { const n = new Set([...prev].filter(id => allowed.has(id))); return n.size === prev.size ? prev : n; });
+  }, [userStatus, plan]);
+
   const toggleShopItem = (id: string, s: boolean) => {
+      // Gratis: alleen het open gerecht mag op de lijst; voor de rest de abonnementen tonen.
+      if (s && userStatus === 'free' && plan?.days.some(d => d.id === id) && !listableIds(plan, 'free').has(id)) { setShowPaywall(true); return; }
       const n = new Set(selectedMealIds);
       s ? n.add(id) : n.delete(id);
       setSelectedMealIds(n);
@@ -684,7 +697,7 @@ export default function App() {
             onMealSelect={(m: Meal) => { setSelectedMeal(m); setView('meal-detail'); }} 
             selectedMealIds={selectedMealIds} 
             onToggleShopItem={toggleShopItem} 
-            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.map((m, i) => ({ ...m, dayIndex: i })).filter(m => selectedMealIds.has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); bumpStat('lists'); if (inTrial && firstTime('qook_moment_first_list')) notify(t.moment_first_list, 'success'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
+            onGenerateList={() => { setLoadingType('list'); setLoading(true); generateShoppingList(plan.days.map((m, i) => ({ ...m, dayIndex: i })).filter(m => selectedMealIds.has(m.id) && listableIds(plan, userStatus).has(m.id)), preferences).then(list => { const have = new Set(pantryHave()); setShoppingList(list.map(i => isPantryItem(i) && have.has(i.name.toLowerCase()) ? { ...i, checked: true } : i)); setView('shopping'); bumpStat('lists'); if (inTrial && firstTime('qook_moment_first_list')) notify(t.moment_first_list, 'success'); }).catch(e => notify(`De boodschappenlijst kon niet worden gemaakt. ${e?.message || ''}`, 'error')).finally(() => setLoading(false)); }} 
             onReplaceMeal={async (oldMeal: Meal, dayIndex: number) => { 
                 if (userStatus === 'free' || userStatus === 'basic') {
                     if (usage.replacements >= 3) { 
