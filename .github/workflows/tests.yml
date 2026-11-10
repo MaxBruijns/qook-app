@@ -18,3 +18,5 @@ jobs:
       # Controleer dat de site en de app echt bouwen (zelfde opdracht als Cloudflare).
       - run: npm run build
       - run: test -f dist/index.html && test -f dist/app/index.html && test -f dist/sw.js && test -f dist/beheer/index.html
+      # Tailwind zit in het gebouwde CSS-bestand (geen los script meer in de browser).
+      - run: grep -q "bg-kooq-sage" dist/assets/*.css && ! grep -q "tailwind.js" dist/app/index.html

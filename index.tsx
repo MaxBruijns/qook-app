@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import './app/app.css';
 import { Notices } from './components/Shared';
 import { bootstrapAccount } from './utils/account';
 

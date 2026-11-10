@@ -11,29 +11,8 @@
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Qook" />
-    <script src="/api/ext/tailwind.js"></script>
-    <!-- Lettertypen en Tailwind via onze eigen server: bezoekers praten niet met Google of Tailwind. -->
+    <!-- Lettertypen via onze eigen server: bezoekers praten niet met Google. Tailwind zit in het gebouwde CSS-bestand. -->
     <link href="/api/ext/fonts.css?family=DM+Sans:wght@400;500;700&family=Inter:wght@400;500;600" rel="stylesheet">
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        kooq: {
-                            sage: '#94B79D', sand: '#D9C9A3', white: '#F5F7F4',
-                            slate: '#5D6E76', clementine: '#F3A567', dark: '#2A3338'
-                        }
-                    },
-                    fontFamily: { sans: ['DM Sans', 'sans-serif'], body: ['Inter', 'sans-serif'] }
-                }
-            }
-        }
-    </script>
-    <style>
-        body { background-color: #F5F7F4; color: #5D6E76; }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-    </style>
 </head>
 <body>
     <div id="root"></div>
