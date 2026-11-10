@@ -200,16 +200,10 @@ export default function App() {
       const currentWeek = getWeekNumber(new Date());
       if (savedUsage) {
           let parsed: Usage = JSON.parse(savedUsage);
-          const lastReset = parsed.lastRegenerationReset ? new Date(parsed.lastRegenerationReset) : null;
           const now = new Date();
-          const isNewDay = lastReset ? (now.getTime() - lastReset.getTime() > 24 * 60 * 60 * 1000) : true;
-
+          // Alles telt per week: vervangingen, scans en het ene extra weekmenu (Premium/Culinair/proef).
           if (parsed.week === currentWeek) {
-              setUsage({ 
-                  ...parsed, 
-                  fullRegenerations: isNewDay ? 0 : (parsed.fullRegenerations || 0),
-                  lastRegenerationReset: isNewDay ? now.toISOString() : parsed.lastRegenerationReset
-              });
+              setUsage({ ...parsed, fullRegenerations: parsed.fullRegenerations || 0 });
           } else {
               setUsage({ replacements: 0, scans: 0, fullRegenerations: 0, week: currentWeek, lastRegenerationReset: now.toISOString() });
           }
@@ -274,20 +268,35 @@ export default function App() {
     }
   }, [usage]);
 
-  const triggerRegeneration = async (prefsOverride?: UserPreferences, isAuto = false) => {
+  // Rechten: iedereen krijgt elke week automatisch een nieuw weekmenu. Premium/Culinair (ook in de proef)
+  // mogen daarnaast 1x per week zelf een nieuw menu laten maken. Het eerste menu (onboarding) mag altijd.
+  const isPremiumLike = userStatus === 'premium' || userStatus === 'culinary';
+  const canRegenerateNow = () => !plan || (isPremiumLike && usage.fullRegenerations < 1);
+
+  /** Nieuwe voorkeuren (instellingen, chat): direct een nieuw menu als dat mag, anders vanaf volgende week. */
+  const applyPrefs = (p: UserPreferences, regen = true) => {
+    setPreferences(p);
+    localStorage.setItem('qook_prefs', JSON.stringify(p));
+    if (!regen) return;
+    if (canRegenerateNow()) triggerRegeneration(p);
+    else alert(t.prefs_next_week);
+  };
+
+  /** Fout van de server: limiet bereikt -> abonnementen tonen, anders een melding. */
+  const handleApiError = (err: any, fallbackText: string) => {
+    if (err?.status === 402) { setShowPaywall(true); return; }
+    alert(`${fallbackText} ${err?.message || ''}`.trim());
+  };
+
+  const triggerRegeneration = async (prefsOverride?: UserPreferences, isAuto = false, force = false) => {
     const activePrefs = prefsOverride || preferences;
     if (!activePrefs) return;
+    const countsAsExtra = !isAuto && !force && !!plan;   // eerste menu en upgrade tellen niet mee
 
-    if (!isAuto) {
-        const maxRegens = (userStatus === 'premium' || userStatus === 'culinary') ? 3 : 1;
-        if (usage.fullRegenerations >= maxRegens) {
-            if (userStatus === 'basic' || userStatus === 'free') {
-                setShowPaywall(true);
-            } else {
-                alert(t.limit_reached_alert || "Je hebt je dagelijkse limiet bereikt.");
-            }
-            return;
-        }
+    if (!isAuto && !force && !canRegenerateNow()) {
+        if (isPremiumLike) alert(t.limit_reached_alert);
+        else setShowPaywall(true);
+        return;
     }
 
     setLoadingType('plan');
@@ -316,21 +325,14 @@ export default function App() {
         localStorage.setItem('qook_prefs', JSON.stringify(updatedPrefs));
 
         if (!isAuto) {
-            setUsage(u => ({ 
-                ...u, 
-                fullRegenerations: u.fullRegenerations + 1,
-                replacements: 0, 
-                scans: 0 
-            }));
+            if (countsAsExtra) setUsage(u => ({ ...u, fullRegenerations: u.fullRegenerations + 1 }));
             setView('dashboard');
         } else {
             setIsAutoRefreshing(false);
         }
     } catch (err) { 
         console.error("Plan generation failed:", err);
-        if (!isAuto) {
-            alert(`Het weekmenu kon niet worden gemaakt. ${(err as Error)?.message || ''}\nProbeer het over een moment opnieuw.`);
-        }
+        if (!isAuto) handleApiError(err, 'Het weekmenu kon niet worden gemaakt.');
     } finally { 
         setLoading(false); 
     }
@@ -549,10 +551,18 @@ export default function App() {
             setLoadingType('scan'); setLoading(true);
             const reader = new FileReader();
             reader.onloadend = async () => {
-                const res = await analyzeFridgeImage((reader.result as string).split(',')[1], preferences || { language: currentLang } as any);
-                setScanResult(res); setView('scan-results'); setLoading(false);
-                if (userStatus === 'basic' || userStatus === 'free') {
-                  setUsage(u => ({ ...u, scans: u.scans + 1 }));
+                try {
+                    const res = await analyzeFridgeImage((reader.result as string).split(',')[1], preferences || { language: currentLang } as any);
+                    setScanResult(res); setView('scan-results');
+                    if (userStatus === 'basic' || userStatus === 'free' || preferences?.trialStartedAt) {
+                      setUsage(u => ({ ...u, scans: u.scans + 1 }));
+                    }
+                } catch (err: any) {
+                    // Limiet bereikt: zonder account eerst registreren, anders de abonnementen.
+                    if (err?.status === 402) { if (account) setShowPaywall(true); else setView('register'); }
+                    else alert(`De scan lukte niet. ${err?.message || ''}`);
+                } finally {
+                    setLoading(false);
                 }
             };
             reader.readAsDataURL(file);
@@ -643,6 +653,7 @@ export default function App() {
                     }
                 } catch (e) { 
                     console.error(e); 
+                    handleApiError(e, 'Vervangen lukte niet.');
                 } finally { 
                     setReplacingId(null); 
                 } 
@@ -675,12 +686,12 @@ export default function App() {
         {view === 'cooking' && selectedMeal && <CookingMode meal={selectedMeal} onClose={() => setView('dashboard')} language={currentLang} onFeedback={(_id, rating) => recordTaste(selectedMeal.title, rating === 'up' ? 'liked' : 'disliked')} />}
         {view === 'shopping' && <ShoppingList items={shoppingList} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => { if (i.id !== id) return i; if (isPantryItem(i)) rememberPantry(i.name, !i.checked); return { ...i, checked: !i.checked }; }))} language={currentLang} />}
       </main>
-      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => { setPreferences(p); triggerRegeneration(p); }} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
+      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
       <ChatAssistant 
         userPrefs={preferences || {} as any} 
         currentPlan={plan} 
         userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} 
-        onUpdatePrefs={(p, regen = true) => { setPreferences(p); if (regen) triggerRegeneration(p); }} 
+        onUpdatePrefs={(p, regen = true) => applyPrefs(p, regen)} 
         onShowPaywall={() => setShowPaywall(true)} 
         currentView={view} 
         onSetStatus={(s) => setUserStatus(s as any)} 
@@ -688,26 +699,33 @@ export default function App() {
         hasBottomAction={isBottomActionVisible}
       />
       <PaywallModal isOpen={showPaywall} onClose={() => setShowPaywall(false)} onUpgrade={(tier) => { 
+          // Een abonnement hoort bij een account: eerst inloggen of registreren.
+          if (!account) { setShowPaywall(false); setView('register'); return; }
           setUserStatus(tier); 
           saveSubscription(tier);
           if (preferences) { 
               const updated = { ...preferences, subscriptionStatus: tier, trialStartedAt: undefined }; 
               setPreferences(updated); 
               localStorage.setItem('qook_prefs', JSON.stringify(updated)); 
-              triggerRegeneration(updated); 
+              if (tier === 'premium' || tier === 'culinary') triggerRegeneration(updated, false, true); 
           } 
           setShowPaywall(false); 
       }} language={currentLang} currentStatus={userStatus} />
       <input type="file" accept="image/*" ref={fileInputRef} onChange={async (e) => {
           const file = e.target.files?.[0]; if (!file) return;
-          if ((userStatus === 'basic' || userStatus === 'free') && usage.scans >= 1) { setShowPaywall(true); return; }
+          const scanLimited = userStatus === 'basic' || userStatus === 'free' || !!preferences?.trialStartedAt;
+          if (scanLimited && usage.scans >= 1) { setShowPaywall(true); return; }
           setLoadingType('scan'); setLoading(true);
           const reader = new FileReader();
           reader.onloadend = async () => {
-              const res = await analyzeFridgeImage((reader.result as string).split(',')[1], preferences || { language: currentLang } as any);
-              setScanResult(res); setView('scan-results'); setLoading(false);
-              if (userStatus === 'basic' || userStatus === 'free') {
-                  setUsage(u => ({ ...u, scans: u.scans + 1 }));
+              try {
+                  const res = await analyzeFridgeImage((reader.result as string).split(',')[1], preferences || { language: currentLang } as any);
+                  setScanResult(res); setView('scan-results');
+                  if (scanLimited) setUsage(u => ({ ...u, scans: u.scans + 1 }));
+              } catch (err) {
+                  handleApiError(err, 'De scan lukte niet.');
+              } finally {
+                  setLoading(false);
               }
           };
           reader.readAsDataURL(file);
