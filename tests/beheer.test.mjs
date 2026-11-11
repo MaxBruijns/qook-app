@@ -33,7 +33,12 @@ assert.equal((await req('/api/v', { method: 'POST', body: { p: 'iets' } })).stat
 assert.deepEqual(sqlite.prepare('SELECT page, count FROM visits ORDER BY page').all().map(r => [r.page, r.count]), [['app', 1], ['landing', 3]]);
 
 // Beheer: zonder sleutel onzichtbaar
-assert.equal((await req('/api/admin/overview')).status, 404);
+// Zonder ingestelde sleutel: duidelijke melding dat ADMIN_KEY ontbreekt.
+let geen = await req('/api/admin/overview', { headers: { 'x-admin-key': 'iets' } });
+assert.equal(geen.status, 503); assert.match((await geen.json()).detail, /ADMIN_KEY/);
+env.ADMIN_KEY = ' geheim\n';
+assert.equal((await req('/api/admin/overview')).status, 404, 'zonder sleutel in het verzoek');
+assert.equal((await req('/api/admin/overview', { headers: { 'x-admin-key': 'geheim ' } })).status, 200, 'spaties en enters tellen niet mee');
 env.ADMIN_KEY = 'geheim';
 assert.equal((await req('/api/admin/overview', { headers: { 'x-admin-key': 'fout' } })).status, 404);
 await req('/api/auth/register', { method: 'POST', body: { name: 'A', email: 'a@q.test', password: 'Wachtwoord1' } });

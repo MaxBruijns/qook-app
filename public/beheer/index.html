@@ -240,9 +240,14 @@ $('#content').addEventListener('change', async (e) => {
   sel.disabled = true;
   try { await api('/api/admin/user', { id: sel.dataset.user, action: 'grant', tier: sel.value }); await loadUsers(); } catch (err) { alert(err.message); }
 });
+function showLoginError(msg) {
+  let el = document.getElementById('loginerr');
+  if (!el) { el = document.createElement('p'); el.id = 'loginerr'; el.className = 'muted'; el.style.color = '#b42318'; $('#login').after(el); }
+  el.textContent = msg;
+}
 $('#login').addEventListener('submit', async (e) => {
   e.preventDefault(); key = $('#key').value.trim();
-  try { await load(); try { sessionStorage.setItem('qook_admin', key); } catch {} } catch (err) { $('#key').value = ''; $('#key').placeholder = err.message; }
+  try { await load(); try { sessionStorage.setItem('qook_admin', key); } catch {} } catch (err) { $('#key').value = ''; $('#key').placeholder = err.message; showLoginError(err.message); }
 });
 window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (t && t !== tab && TABS.some(([id]) => id === t)) { tab = t; if (data) { render(); if (tab === 'gebruikers' && !users) loadUsers(); } } });
 if (key) load().catch(() => { $('#login').hidden = false; });
