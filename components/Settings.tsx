@@ -156,6 +156,9 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
     setTasteSignals(0);
   };
 
+  // Let op: alle hooks staan vóór deze return (React vereist dezelfde volgorde bij elke weergave).
+  const [askConsentFor, setAskConsentFor] = useState<string | null>(null);
+
   if (!isOpen) return null;
 
   const handleSaveAttempt = () => {
@@ -189,7 +192,6 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
   };
 
   // Een allergie-/intolerantiedieet is een gezondheidsgegeven: eerst uitdrukkelijke toestemming vragen.
-  const [askConsentFor, setAskConsentFor] = useState<string | null>(null);
   const toggleDiet = (val: string) => {
     const current = localPrefs.diet || [];
     if (current.includes(val)) { setLocalPrefs({ ...localPrefs, diet: current.filter(d => d !== val) }); return; }
