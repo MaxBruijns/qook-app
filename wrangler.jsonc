@@ -3,6 +3,8 @@
   "name": "kooq",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
+  // Variabelen die in het Cloudflare-dashboard zijn ingesteld (bijv. MAIL_FROM, APP_URL) niet wissen bij een nieuwe versie.
+  "keep_vars": true,
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application",
