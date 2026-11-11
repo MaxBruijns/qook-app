@@ -82,7 +82,7 @@ export async function tally(env: AdminEnv, page: string) {
     ON CONFLICT(day, page) DO UPDATE SET count = count + 1`).bind(new Date().toISOString().slice(0, 10), page).run();
 }
 
-const isAdmin = (req: Request, env: AdminEnv) => !!env.ADMIN_KEY && req.headers.get('x-admin-key') === env.ADMIN_KEY;
+const isAdmin = (req: Request, env: AdminEnv) => !!env.ADMIN_KEY?.trim() && (req.headers.get('x-admin-key') || '').trim() === env.ADMIN_KEY.trim();
 
 async function count(db: any, sql: string, ...args: any[]) {
   const r = await db.prepare(sql).bind(...args).first().catch(() => null);
@@ -214,6 +214,8 @@ const ADMIN_PATHS = ['/api/admin/overview', '/api/admin/action', '/api/admin/rev
 /** /api/admin/* (alleen met ADMIN_KEY). */
 export async function handleAdmin(req: Request, env: AdminEnv, path: string): Promise<Response | null> {
   if (!ADMIN_PATHS.includes(path)) return null;
+  // Zonder ingestelde sleutel is het beheer uit; dat melden we, zodat duidelijk is wat er ontbreekt.
+  if (!env.ADMIN_KEY?.trim()) return json({ detail: 'Beheersleutel is nog niet ingesteld in Cloudflare (ADMIN_KEY)', code: 'no_key' }, 503);
   if (!isAdmin(req, env)) return json({ detail: 'Niet gevonden' }, 404);
   await ensureAdminSchema(env.DB);
   const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
