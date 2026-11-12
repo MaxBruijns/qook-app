@@ -544,6 +544,65 @@ async function createImage(env: Env, recipe: any): Promise<string> {
   return imageUrl(recipe.id);
 }
 
+// ---------------------------------------------------------------------------
+// TIJDELIJK: fototest — stappenfoto's per recept naast een vaste set techniekfoto's,
+// om te beoordelen of foto's bij de bereiding iets toevoegen. Wordt na de test verwijderd.
+// Elk deel is een eigen aanvraag (recept 0, 1, 2 en 'tech'), zodat één aanvraag klein blijft.
+// ---------------------------------------------------------------------------
+const FOTOTEST_STYLE = 'Bright natural daylight, light wooden kitchen countertop, close-up, realistic home cooking photo, no text, no watermark, no faces.';
+const FOTOTEST_TECH: [string, string, string][] = [
+  ['ui-snipperen', 'Ui snipperen', 'Hands finely dicing a peeled yellow onion with a chef knife on a wooden cutting board, small even onion pieces.'],
+  ['aanbraden', 'Vlees aanbraden', 'Pieces of chicken searing in a hot stainless steel frying pan with oil, golden brown crust on the underside.'],
+  ['inkoken', 'Saus laten inkoken', 'A wooden spoon dipped in a thickened glossy tomato sauce in a saucepan, the sauce coats the back of the spoon.'],
+  ['al-dente', 'Pasta afgieten', 'Cooked spaghetti being drained in a metal colander over a sink, steam rising.'],
+  ['blokjes', 'Groenten in blokjes', 'Hands cutting a carrot and a zucchini into even small cubes with a chef knife on a wooden cutting board.'],
+  ['goudbruin', 'Goudbruin bakken', 'Potato slices frying in a cast iron pan, evenly golden brown, not burnt.'],
+];
+
+async function fotoTestImage(env: Env, key: string, prompt: string): Promise<string | null> {
+  try {
+    const out: any = await env.AI.run(IMAGE_MODEL, { prompt: prompt.slice(0, 2000), steps: 6 });
+    if (!out?.image) return null;
+    const { body, type } = await toWebp(env, base64ToBytes(out.image));
+    await env.PHOTOS.put(`meals/${key}.jpg`, body, { httpMetadata: { contentType: type } });
+    return imageUrl(key);
+  } catch (e) { console.error('fototest', key, errMsg(e)); return null; }
+}
+
+async function fotoTest(env: Env, part: string | null) {
+  const state = (await readState(env, 'fototest')) || { recipes: [], techniques: [] };
+  if (!part) return state;
+  if (part === 'tech') {
+    if (state.techniques.length) return state;
+    state.techniques = await Promise.all(FOTOTEST_TECH.map(async ([slug, name, prompt]) =>
+      ({ name, url: await fotoTestImage(env, `fototest-tech-${slug}`, `Instructional cooking photo: ${prompt} ${FOTOTEST_STYLE}`) })));
+  } else {
+    const n = Number(part);
+    if (!(n >= 0 && n < 3) || state.recipes[n]) return state;
+    const taken = state.recipes.filter(Boolean).map((r: any) => r.id);
+    const { results } = await env.DB.prepare(
+      `SELECT id, title, data, details FROM recipes WHERE has_image = 1 AND details_v >= ? AND details IS NOT NULL
+       AND json_array_length(json_extract(details, '$.steps')) BETWEEN 4 AND 7 ORDER BY random() LIMIT 10`
+    ).bind(MIN_RECIPE_VERSION).all();
+    const row: any = (results || []).find((r: any) => !taken.includes(r.id));
+    if (!row) throw new ApiError(404, 'Geen geschikt recept gevonden');
+    const details = JSON.parse(row.details), data = JSON.parse(row.data || '{}');
+    const steps = list(details.steps).map((st: any) => String(st.user_text || st.text || '')).filter(Boolean);
+    const plan = await aiJson(env,
+      'You write image prompts for photos that illustrate the steps of a recipe. Return JSON {"prompts": ["..."]}, one per step, in order.',
+      `Dish: ${row.title}. Final dish: ${data.ai_image_prompt || row.title}.\nSteps (Dutch):\n${steps.map((t: string, i: number) => `${i + 1}. ${t}`).join('\n')}\n\n` +
+      'For each step, describe in English (max 35 words) what the food looks like at the END of that step: which ingredients, in which pan or bowl, raw or cooked. Only ingredients named in the steps. No people.',
+      0.4);
+    const prompts: string[] = list(plan.prompts).map(String);
+    const shots = await Promise.all(steps.map(async (text: string, i: number) =>
+      ({ text, url: prompts[i] ? await fotoTestImage(env, `fototest-${row.id}-${i + 1}`, `Cooking step photo: ${prompts[i]} ${FOTOTEST_STYLE}`) : null })));
+    state.recipes[n] = { id: row.id, title: row.title, main: imageUrl(row.id), steps: shots };
+  }
+  state.at = new Date().toISOString();
+  await writeState(env, 'fototest', state);
+  return state;
+}
+
 function imageOnce(env: Env, recipe: any) {
   let p = inflight.get(recipe.id);
   if (!p) {
@@ -1682,6 +1741,10 @@ export default {
     if (auth) return auth;
 
     try {
+      if (path === '/api/fototest') {
+        await ensureSchema(env);
+        return json(await fotoTest(env, request.method === 'POST' ? new URL(request.url).searchParams.get('part') : null));
+      }
       if (request.method === 'GET' && path.startsWith('/api/images/')) {
         return await serveImage(env, path.slice('/api/images/'.length), ctx);
       }
