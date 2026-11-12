@@ -38,6 +38,7 @@ const rememberPantry = (name: string, have: boolean) => {
 const firstTime = (key: string) => {
     try { if (localStorage.getItem(key)) return false; localStorage.setItem(key, '1'); return true; } catch { return false; }
 };
+const servingsCount = (p?: UserPreferences | null) => Math.max(1, (p?.adultsCount ?? 2) + (p?.childrenCount ?? 0));
 const allMealIds = (p: WeeklyPlan | null) => new Set((p?.days || []).map(m => m.id));
 // Welke gerechten op de boodschappenlijst mogen: bij Gratis alleen het open gerecht (dag 1),
 // vanaf Basic en tijdens de proef de hele week.
@@ -345,11 +346,28 @@ export default function App() {
       if (!p.diet.length) p.diet = ['Geen'];
       notify(t.allergy_consent_needed);
     }
+    const servingsChanged = servingsCount(p) !== servingsCount(preferences);
     setPreferences(p);
     localStorage.setItem('qook_prefs', JSON.stringify(p));
-    if (!regen) return;
+    if (!regen) { if (servingsChanged) rescaleForServings(p); return; }
     if (canRegenerateNow()) triggerRegeneration(p);
     else notify(t.prefs_next_week);
+  };
+
+  /** Ander aantal personen: zelfde gerechten, alleen de hoeveelheden opnieuw (recepten en lijst). */
+  const rescaleForServings = (p: UserPreferences) => {
+    if (!plan) return;
+    const servings = servingsCount(p);
+    // Opgehaalde ingrediënten vergeten: het recept wordt bij openen opnieuw geschaald (uit de bank, geen AI).
+    const newPlan = { ...plan, days: plan.days.map(m => ({ ...m, servings, ingredients: undefined as any })) };
+    setPlan(newPlan);
+    localStorage.setItem('qook_current_plan', JSON.stringify(stripImages(newPlan)));
+    if (shoppingList.length) {
+      const meals = newPlan.days.map((m, i) => ({ ...m, dayIndex: i })).filter(m => selectedMealIds.has(m.id) && listableIds(newPlan, userStatus).has(m.id));
+      const checked = new Set(shoppingList.filter(i => i.checked).map(i => i.name.toLowerCase()));
+      generateShoppingList(meals, p).then(list => setShoppingList(list.map(i => checked.has(i.name.toLowerCase()) ? { ...i, checked: true } : i))).catch(() => {});
+    }
+    notify(t.servings_updated.replace('{n}', String(servings)), 'success');
   };
 
   /** Fout van de server: limiet bereikt -> abonnementen tonen, anders een melding. */
@@ -785,7 +803,7 @@ export default function App() {
             subtitle={preferences ? t.shop_subtitle.replace('{n}', String(selectedMealIds.size)).replace('{p}', String((preferences.adultsCount ?? 2) + (preferences.childrenCount ?? 0))) : undefined}
             onEmail={account && canMail ? async (sections) => { try { const r = await emailShoppingList(sections); notify(t.email_sent.replace('{email}', r.to), 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } } : undefined} onClose={() => setView('dashboard')} onToggleItem={(id) => setShoppingList(l => l.map(i => { if (i.id !== id) return i; if (isPantryItem(i)) rememberPantry(i.name, !i.checked); return { ...i, checked: !i.checked }; }))} language={currentLang} />}
       </main>
-      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p) => applyPrefs(p)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onManageBilling={account?.billing && canPay ? () => openBillingPortal().catch(e => notify(e?.message || t.auth_error, 'error')) : undefined} onToggleMarketing={async (on) => { try { await setMarketing(on); notify(on ? t.marketing_on : t.marketing_off, 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
+      {preferences && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} preferences={preferences} onUpdate={(p, newMenu) => applyPrefs(p, newMenu !== false)} onReset={async () => { await resetAccountData(); localStorage.clear(); window.location.reload(); }} account={account} onLogin={() => { setShowSettings(false); setView('login'); }} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onManageBilling={account?.billing && canPay ? () => openBillingPortal().catch(e => notify(e?.message || t.auth_error, 'error')) : undefined} onToggleMarketing={async (on) => { try { await setMarketing(on); notify(on ? t.marketing_on : t.marketing_off, 'success'); } catch (e: any) { notify(e?.message || t.auth_error, 'error'); } }} onUnlock={() => setView('register')} userStatus={userStatus === 'free' ? 'visitor' : userStatus as any} onShowPaywall={(m) => setShowPaywall(true)} />}
       <ChatAssistant 
         userPrefs={preferences || {} as any} 
         currentPlan={plan} 

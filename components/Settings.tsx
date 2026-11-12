@@ -13,7 +13,7 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   preferences: UserPreferences;
-  onUpdate: (prefs: UserPreferences) => void;
+  onUpdate: (prefs: UserPreferences, newMenu?: boolean) => void;
   onReset: () => void;
   onUnlock: () => void; 
   userStatus: 'visitor' | 'trial' | 'premium' | 'culinary' | 'basic' | 'free';
@@ -161,27 +161,32 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, preferences, o
 
   if (!isOpen) return null;
 
+  // Alleen een ander aantal personen (of naam/toestemming) = zelfde gerechten, andere hoeveelheden.
+  // Al het andere (dieet, budget, voorkeuren, kooktijd...) kan andere gerechten vragen: nieuw menu.
+  const needsNewMenu = () => {
+    const sameMenuKeys = ['adultsCount', 'childrenCount', 'name', 'allergyConsent'];
+    const keys = new Set([...Object.keys(preferences), ...Object.keys(localPrefs)]);
+    return [...keys].some(k => !sameMenuKeys.includes(k) && JSON.stringify((localPrefs as any)[k]) !== JSON.stringify((preferences as any)[k]));
+  };
+
   const handleSaveAttempt = () => {
-    // Determine if critical preferences changed that require full regen
     const criticalChanged = 
         JSON.stringify(localPrefs.diet) !== JSON.stringify(preferences.diet) ||
         localPrefs.budget !== preferences.budget ||
         localPrefs.weekProfile !== preferences.weekProfile ||
-        localPrefs.adultsCount !== preferences.adultsCount ||
-        localPrefs.childrenCount !== preferences.childrenCount ||
         localPrefs.region !== preferences.region ||
         localPrefs.zeroWasteLevel !== preferences.zeroWasteLevel;
 
     if (criticalChanged) {
         setShowWarning(true);
     } else {
-        onUpdate(localPrefs);
+        onUpdate(localPrefs, needsNewMenu());
         onClose();
     }
   };
 
   const confirmSave = () => {
-    onUpdate(localPrefs);
+    onUpdate(localPrefs, true);
     setShowWarning(false);
     onClose();
   };
