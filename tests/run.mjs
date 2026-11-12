@@ -40,6 +40,7 @@ write('taste.mjs', compile('utils/tasteProfile.ts'));
 write('history.mjs', compile('utils/mealHistory.ts'));
 write('account.mjs', compile('utils/account.ts'));
 write('pdf.mjs', compile('utils/shoppingPdf.ts'));
+write('timers.mjs', compile('utils/cookTimers.ts'));
 write('service.mjs', compile('services/geminiService.ts')
   .replace(/from ['"]\.\.\/utils\/tasteProfile['"]/, 'from "./taste.mjs"')
   .replace(/from ['"]\.\.\/utils\/mealHistory['"]/, 'from "./history.mjs"'));

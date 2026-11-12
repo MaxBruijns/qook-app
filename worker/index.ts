@@ -637,12 +637,12 @@ const RECIPE_RULES = `KWALITEITSREGELS (controleer je recept hierop voordat je a
    Temperaturen en tijden mogen wel.
 10. Geef elk ingrediënt een supermarktcategorie uit de vaste lijst (voor de boodschappenlijst).`;
 
-const TIMER_RULES = `STRIKTE TIMER REGELS:
-1. NOOIT een timer voor de oven (ovens hebben eigen timers).
-2. NOOIT een timer voor voorbereiding (snijden, wassen, afmeten).
-3. NOOIT een timer voor 'voorverwarmen'.
-4. ALLEEN een timer voor actieve kookprocessen op het fornuis (koken, sudderen, bakken) of passieve processen (rusten, marineren) waar de exacte tijd essentieel is voor de kwaliteit.
-5. De 'timer_label' moet kort en bondig beschrijven wat er gebeurt.`;
+const TIMER_RULES = `STRIKTE TIMER REGELS (de app maakt timers uit de tekst van de stap):
+1. Heeft een stap een VASTE tijd, zet die tijd dan letterlijk in de tekst ("kook de pasta 9 minuten", "laat 30 minuten marineren", "bak 8-10 minuten"), en zet needs_timer true met precies die tijd.
+2. Een wachttijd die afhangt van pan, fornuis of oven is GEEN vaste tijd: "breng water aan de kook", "verwarm de oven voor", "bak tot goudbruin", "fruit tot glazig". Noem daar geen minuten bij en zet needs_timer false.
+3. Splits wachten en koken: eerst "breng water aan de kook", daarna een aparte zin "kook de pasta 9 minuten".
+4. Nooit een timer voor voorbereiding (snijden, wassen, afmeten).
+5. De 'timer_label' beschrijft kort wat er gebeurt.`;
 
 const MODE_RULES = `MODUS RICHTLIJNEN:
 - 'premium': Toegankelijke, gezonde en smaakvolle doordeweekse gerechten. Focus op eenvoud en dagelijks gemak.

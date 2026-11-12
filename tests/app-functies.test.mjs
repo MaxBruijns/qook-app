@@ -92,7 +92,7 @@ assert.deepEqual(full.supplies, ['Pan']);
 assert.equal(full.wine_pairing.type, 'Soave');
 assert.equal(full.base_servings, undefined);
 assert.equal(full.title, 'Pasta pesto');
-assert.match(lastSystem, /NOOIT een timer voor de oven/); assert.match(lastSystem, /4 personen/);
+assert.match(lastSystem, /VASTE tijd/); assert.match(lastSystem, /breng water aan de kook/); assert.match(lastSystem, /4 personen/);
 const full2 = await svc.generateFullRecipe(plan.days[0], { ...prefs, adultsCount: 4, childrenCount: 2 });
 assert.equal(gemini, g0 + 1, 'tweede keer uit de bank');
 assert.deepEqual(full2.ingredients.map(i => i.amount), [600, '6']);
