@@ -545,6 +545,75 @@ async function createImage(env: Env, recipe: any): Promise<string> {
 }
 
 /** Opruimen van de (beëindigde) fototest: testfoto's en de opgeslagen stand. Doet niets meer als alles weg is. */
+// ---------------------------------------------------------------------------
+// Eenmalig nalopen van bestaande recepten: vaste tijden letterlijk in de stap zetten
+// (de kookstand maakt alleen bij een vaste tijd in de tekst een timer). Verder blijft de tekst gelijk.
+// Eerst een proef zonder opslaan (/api/timerpass), daarna via de cron in kleine porties.
+// ---------------------------------------------------------------------------
+const TIMER_PASS_APPLY = false;   // pas aanzetten na controle van de proef
+const TIMER_PASS_BATCH = 12;
+
+const TIMER_PASS_SYSTEM = `Je past bestaande receptstappen minimaal aan zodat een kookapp er een timer bij kan tonen.
+Regels:
+1. Laat elke stap woordelijk gelijk, behalve waar een proces een VASTE duur heeft: rusten, marineren, laten trekken, afkoelen, sudderen of stoven met een vaste tijd, garen in water dat al kookt, oventijd, in de vriezer of koelkast. Voeg daar de tijd natuurlijk in de zin toe, bijvoorbeeld "laat 5 minuten rusten" of "kook de pasta 9 minuten".
+2. Voeg NOOIT een tijd toe bij iets dat afhangt van pan, fornuis of oven: water aan de kook brengen, voorverwarmen, verhitten, "tot goudbruin", "tot glazig", "tot knapperig", "tot de saus dikker wordt". Laat die zinnen precies zoals ze zijn.
+3. Staat er "kook volgens de verpakking", laat dat dan staan; verzin geen tijd.
+4. Wacht-op-de-kook en een vaste kooktijd in één stap mag je splitsen in twee zinnen in dezelfde stap: "Breng water aan de kook. Kook de rijst 12 minuten."
+5. Verander geen ingrediënten, hoeveelheden, volgorde of aantal stappen. Gebruik bij twijfel de eerdere schatting als hint, alleen als de duur echt vast is.
+Antwoord uitsluitend met JSON: {"steps": ["stap 1 tekst", "stap 2 tekst", ...]}, evenveel stappen als je kreeg.`;
+
+const words = (t: string) => t.toLowerCase().match(/[a-zà-ÿ]{4,}/g) || [];
+/** Een herschreven stap telt alleen als bijna alle oude woorden er nog in staan en hij niet veel langer is. */
+export function acceptStepRewrite(before: string, after: string): boolean {
+  if (!after || typeof after !== 'string') return false;
+  if (after.length > before.length * 1.4 + 60) return false;
+  const kept = new Set(words(after));
+  const old = words(before);
+  return !old.length || old.filter(w => kept.has(w)).length / old.length >= 0.9;
+}
+
+async function timerPassOne(env: Env, row: any) {
+  const details = JSON.parse(row.details || '{}');
+  const steps = list(details.steps);
+  const texts = steps.map((st: any) => String(st.user_text || ''));
+  const hint = steps.map((st: any, i: number) => `${i + 1}. ${texts[i]}${st.needs_timer && st.estimated_duration_seconds ? ` (eerdere schatting: ${Math.round(st.estimated_duration_seconds / 60)} min)` : ''}`).join('\n');
+  const out = await aiJson(env, TIMER_PASS_SYSTEM, `Gerecht: ${row.title}\nStappen:\n${hint}`, 0.2);
+  const proposed: string[] = list(out.steps).map(String);
+  const after = texts.map((t: string, i: number) => (proposed.length === texts.length && acceptStepRewrite(t, proposed[i]) ? proposed[i] : t));
+  return { details, steps, before: texts, after };
+}
+
+async function timerPassPreview(env: Env) {
+  const cached = await readState(env, 'timerpass_preview');
+  const progress: any = await env.DB.prepare(
+    `SELECT COUNT(*) AS total, SUM(CASE WHEN json_extract(details, '$.timer_pass') IS NOT NULL THEN 1 ELSE 0 END) AS done
+     FROM recipes WHERE details_v >= ? AND details IS NOT NULL`).bind(MIN_RECIPE_VERSION).first();
+  if (cached) return { apply: TIMER_PASS_APPLY, progress, preview: cached };
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, details FROM recipes WHERE details_v >= ? AND details IS NOT NULL ORDER BY random() LIMIT 6`).bind(MIN_RECIPE_VERSION).all();
+  const preview = await Promise.all((results || []).map(async (row: any) => {
+    try { const r = await timerPassOne(env, row); return { title: row.title, steps: r.before.map((b: string, i: number) => ({ before: b, after: r.after[i] })) }; }
+    catch (e) { return { title: row.title, error: errMsg(e) }; }
+  }));
+  await writeState(env, 'timerpass_preview', preview);
+  return { apply: TIMER_PASS_APPLY, progress, preview };
+}
+
+async function timerPassRun(env: Env) {
+  if (!TIMER_PASS_APPLY) return;
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, details FROM recipes WHERE details_v >= ? AND details IS NOT NULL
+     AND json_extract(details, '$.timer_pass') IS NULL LIMIT ?`).bind(MIN_RECIPE_VERSION, TIMER_PASS_BATCH).all();
+  for (const row of (results || []) as any[]) {
+    try {
+      const { details, steps, before, after } = await timerPassOne(env, row);
+      const next = { ...details, timer_pass: 1, steps_before_timer_pass: before,
+        steps: steps.map((st: any, i: number) => ({ ...st, user_text: after[i] })) };
+      await env.DB.prepare('UPDATE recipes SET details = ? WHERE id = ?').bind(JSON.stringify(next), row.id).run();
+    } catch (e) { console.warn('Timer nalopen mislukt', row.id, errMsg(e)); break; }
+  }
+}
+
 async function cleanupFotoTest(env: Env) {
   if (!(await readState(env, 'fototest'))) return;
   const listed: any = await env.PHOTOS.list({ prefix: 'meals/fototest-' });
@@ -1691,6 +1760,10 @@ export default {
     if (auth) return auth;
 
     try {
+      if (request.method === 'GET' && path === '/api/timerpass') {
+        await ensureSchema(env);
+        return json(await timerPassPreview(env));
+      }
       if (request.method === 'GET' && path.startsWith('/api/images/')) {
         return await serveImage(env, path.slice('/api/images/'.length), ctx);
       }
@@ -1762,7 +1835,8 @@ export default {
         .catch(e => console.warn('Proef-e-mails mislukt', errMsg(e))))
       .finally(() => cleanupInactiveAccounts(env).catch(e => console.warn('Opruimen accounts mislukt', errMsg(e))))
       .finally(() => dailyAdminTasks(env as any).catch(e => console.warn('Stripe-controle mislukt', errMsg(e))))
-      .finally(() => cleanupFotoTest(env).catch(e => console.warn('Opruimen fototest mislukt', errMsg(e))));
+      .finally(() => cleanupFotoTest(env).catch(e => console.warn('Opruimen fototest mislukt', errMsg(e))))
+      .finally(() => timerPassRun(env).catch(e => console.warn('Timer nalopen mislukt', errMsg(e))));
     if (ctx?.waitUntil) ctx.waitUntil(run); else await run;
   },
 };
