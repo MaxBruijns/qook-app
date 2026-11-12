@@ -28,3 +28,11 @@ assert.deepEqual(secs('Breng water aan de kook. Kook de pasta 9 minuten.'), [[54
 // Geen tijdseenheden: geen timer.
 assert.deepEqual(secs('Snijd 2 uien en 1 paprika. Verwarm op 180 graden voor 4 personen.'), []);
 console.log('TIMERS: IN ORDE');
+// Uitgeschreven getallen (veel bestaande recepten)
+assert.deepEqual(secs('Bak de venkel gedurende twintig minuten tot hij zacht is.'), [[1200, 1200]]);
+assert.deepEqual(secs('Laat vijfentwintig minuten sudderen.'), [[1500, 1500]]);
+assert.deepEqual(secs('Bak de blaadjes twee minuten krokant.'), [[120, 120]]);
+assert.deepEqual(secs('Kook acht tot tien minuten.'), [[480, 600]]);
+assert.deepEqual(secs('Laat een paar minuten afkoelen.'), [], 'een paar = geen vaste tijd');
+assert.deepEqual(secs('Bak in enkele minuten goudbruin.'), []);
+console.log('TIMERS (woorden): IN ORDE');

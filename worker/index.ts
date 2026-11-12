@@ -23,6 +23,7 @@
  *  - PASSWORD_ITERATIONS, RESEND_API_KEY, MAIL_FROM (optioneel) — accounts, zie worker/auth.ts
  */
 
+import { digitsForNumberWords } from '../utils/cookTimers';
 import { handleAuth, currentUser, tierOf } from './auth';
 import { Actor, BANK_ONLY, ROUTE_ACTIONS, LimitError, checkLimit, countUse, cleanupCounters } from './limits';
 import { recordMilestone, countReused, runTrialMails, unsubscribe, cleanupInactiveAccounts, Milestone } from './engagement';
@@ -563,13 +564,24 @@ Regels:
 Antwoord uitsluitend met JSON: {"steps": ["stap 1 tekst", "stap 2 tekst", ...]}, evenveel stappen als je kreeg.`;
 
 const words = (t: string) => t.toLowerCase().match(/[a-zà-ÿ]{4,}/g) || [];
-/** Een herschreven stap telt alleen als bijna alle oude woorden er nog in staan en hij niet veel langer is. */
+// Een NIEUWE tijd mag alleen bij een proces met een vaste duur, en nooit bij iets dat "tot ..." gebeurt.
+const FIXED_PROCESS = /rust|marine|trek|afkoel|laat .*koel|sudder|stoof|stove|oven|vriezer|koelkast|pocheer|blancheer|wel(len|t)|week|rijzen|kook de (pasta|rijst|spaghetti|noedels|aardappel|krieltjes|eieren|ei|gnocchi|bulgur|couscous|quinoa)/i;
+const CONDITION = /\btot\b|goudbruin|bruin|glazig|krokant|knapperig|\brul\b|kort aan|geslonken|dikker|zacht wordt|gaar is/i;
+const durations = (t: string) => (digitsForNumberWords(t).match(/\d+(?:[.,]\d+)?\s*(?:(?:-|–|tot)\s*\d+\s*)?(?:seconden|minuten|minuut|uur|uren|min)\b/gi) || []).map(x => x.replace(/\s+/g, ' ').toLowerCase());
+
+/** Een herschreven stap telt alleen als de tekst verder gelijk blijft en een toegevoegde tijd past bij een vaste duur. */
 export function acceptStepRewrite(before: string, after: string): boolean {
   if (!after || typeof after !== 'string') return false;
   if (after.length > before.length * 1.4 + 60) return false;
-  const kept = new Set(words(after));
-  const old = words(before);
-  return !old.length || old.filter(w => kept.has(w)).length / old.length >= 0.9;
+  const kept = new Set(words(digitsForNumberWords(after)));
+  const old = words(digitsForNumberWords(before));
+  if (old.length && old.filter(w => kept.has(w)).length / old.length < 0.9) return false;
+  const had = durations(before);
+  for (const clause of digitsForNumberWords(after).split(/[.;!?]/)) {
+    const added = durations(clause).filter(d => !had.includes(d));
+    if (added.length && (!FIXED_PROCESS.test(clause) || CONDITION.test(clause))) return false;
+  }
+  return true;
 }
 
 async function timerPassOne(env: Env, row: any) {
@@ -584,7 +596,7 @@ async function timerPassOne(env: Env, row: any) {
 }
 
 async function timerPassPreview(env: Env) {
-  const cached = await readState(env, 'timerpass_preview');
+  const cached = await readState(env, 'timerpass_preview_v2');
   const progress: any = await env.DB.prepare(
     `SELECT COUNT(*) AS total, SUM(CASE WHEN json_extract(details, '$.timer_pass') IS NOT NULL THEN 1 ELSE 0 END) AS done
      FROM recipes WHERE details_v >= ? AND details IS NOT NULL`).bind(MIN_RECIPE_VERSION).first();
@@ -595,7 +607,7 @@ async function timerPassPreview(env: Env) {
     try { const r = await timerPassOne(env, row); return { title: row.title, steps: r.before.map((b: string, i: number) => ({ before: b, after: r.after[i] })) }; }
     catch (e) { return { title: row.title, error: errMsg(e) }; }
   }));
-  await writeState(env, 'timerpass_preview', preview);
+  await writeState(env, 'timerpass_preview_v2', preview);
   return { apply: TIMER_PASS_APPLY, progress, preview };
 }
 
