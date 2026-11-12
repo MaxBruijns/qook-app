@@ -27,7 +27,8 @@ const write = (name, code) => fs.writeFileSync(path.join(out, name), code);
 
 // Worker: elk bestand, met lokale imports naar .mjs
 const workerModules = fs.readdirSync(path.join(root, 'worker')).filter(f => f.endsWith('.ts')).map(f => f.slice(0, -3));
-const fixImports = (code) => code.replace(/from '\.\/([\w-]+)'/g, (m, n) => (workerModules.includes(n) ? `from './${n}.mjs'` : m));
+const fixImports = (code) => code.replace(/from '\.\/([\w-]+)'/g, (m, n) => (workerModules.includes(n) ? `from './${n}.mjs'` : m))
+  .replace(/from '\.\.\/utils\/cookTimers'/g, "from './timers.mjs'");
 for (const name of workerModules) {
   let code = fixImports(compile(`worker/${name}.ts`));
   if (name === 'index') {
