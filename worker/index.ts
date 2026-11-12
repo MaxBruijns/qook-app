@@ -551,7 +551,7 @@ async function createImage(env: Env, recipe: any): Promise<string> {
 // (de kookstand maakt alleen bij een vaste tijd in de tekst een timer). Verder blijft de tekst gelijk.
 // Eerst een proef zonder opslaan (/api/timerpass), daarna via de cron in kleine porties.
 // ---------------------------------------------------------------------------
-const TIMER_PASS_APPLY = false;   // pas aanzetten na controle van de proef
+const TIMER_PASS_APPLY = true;    // proef gecontroleerd (12 nov 2026); loopt via de cron in porties
 const TIMER_PASS_BATCH = 12;
 
 const TIMER_PASS_SYSTEM = `Je past bestaande receptstappen minimaal aan zodat een kookapp er een timer bij kan tonen.
@@ -566,7 +566,7 @@ Antwoord uitsluitend met JSON: {"steps": ["stap 1 tekst", "stap 2 tekst", ...]},
 const words = (t: string) => t.toLowerCase().match(/[a-zà-ÿ]{4,}/g) || [];
 // Een NIEUWE tijd mag alleen bij een proces met een vaste duur, en nooit bij iets dat "tot ..." gebeurt.
 const FIXED_PROCESS = /rust|marine|trek|afkoel|laat .*koel|sudder|stoof|stove|oven|vriezer|koelkast|pocheer|blancheer|wel(len|t)|week|rijzen|kook de (pasta|rijst|spaghetti|noedels|aardappel|krieltjes|eieren|ei|gnocchi|bulgur|couscous|quinoa)/i;
-const CONDITION = /\btot\b|goudbruin|bruin|glazig|krokant|knapperig|\brul\b|kort aan|geslonken|dikker|zacht wordt|gaar is/i;
+const CONDITION = /verpakking|aanwijzing|\btot\b|goudbruin|bruin|glazig|krokant|knapperig|\brul\b|kort aan|geslonken|dikker|zacht wordt|gaar is/i;
 const durations = (t: string) => (digitsForNumberWords(t).match(/\d+(?:[.,]\d+)?\s*(?:(?:-|–|tot)\s*\d+\s*)?(?:seconden|minuten|minuut|uur|uren|min)\b/gi) || []).map(x => x.replace(/\s+/g, ' ').toLowerCase());
 
 /** Een herschreven stap telt alleen als de tekst verder gelijk blijft en een toegevoegde tijd past bij een vaste duur. */

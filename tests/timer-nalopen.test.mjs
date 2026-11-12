@@ -16,3 +16,5 @@ assert.ok(!acceptStepRewrite('Bak hierin het gehakt rul met de ui.', 'Bak hierin
 assert.ok(!acceptStepRewrite('Voeg steeds bouillon toe onder regelmatig roeren tot de rijst gaar is.', 'Voeg steeds bouillon toe onder regelmatig roeren 20 minuten tot de rijst gaar is.'));
 assert.ok(acceptStepRewrite('Bak de venkel gedurende twintig minuten tot hij zacht is.', 'Bak de venkel gedurende 20 minuten tot hij zacht is.'), 'bestaande tijd in cijfers mag');
 console.log('TIMER NALOPEN (streng): IN ORDE');
+assert.ok(!acceptStepRewrite('Kook de noedels volgens de verpakking.', 'Kook de noedels 4 minuten volgens de verpakking.'), 'verpakking blijft leidend');
+console.log('TIMER NALOPEN (verpakking): IN ORDE');
